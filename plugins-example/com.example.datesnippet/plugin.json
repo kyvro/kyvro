@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "com.example.datesnippet",
+  "name": "Date Snippets",
+  "version": "0.1.0",
+  "description": "Quick date/time formatting with dynamic templates",
+  "author": { "name": "Kyvro Examples" },
+  "main": "index.js",
+  "minHostVersion": "0.1.0",
+  "platforms": ["darwin", "windows", "linux"],
+  "activationEvents": ["onSearchPrefix:date"],
+  "permissions": [],
+  "commands": [
+    {
+      "id": "date.today",
+      "title": "Today's Date",
+      "keywords": ["today", "date"]
+    },
+    {
+      "id": "date.now",
+      "title": "Current Time",
+      "keywords": ["now", "time"]
+    }
+  ]
+}

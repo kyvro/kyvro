@@ -36,15 +36,18 @@ type SearchService struct {
 	source     platform.AppSource
 	launcher   platform.AppLauncher
 
-	initOnce sync.Once
-	store    *core.Store
-	engine   *core.Engine
-	mgr      *kyvroplugin.Manager
+	initOnce  sync.Once
+	store     *core.Store
+	engine    *core.Engine
+	mgr       *kyvroplugin.Manager
 	installer *kyvroplugin.Installer
-	initErr  error
+	initErr   error
 
 	mu   sync.Mutex
 	last map[string]core.SearchResult
+
+	snippets     *core.SnippetsService
+	textExpander platform.TextExpander
 }
 
 // New creates the search service. dataPath is the bbolt usage database;
@@ -80,10 +83,21 @@ func (s *SearchService) ServiceStartup(_ context.Context, _ application.ServiceO
 		)
 		go appsProvider.Warmup()
 
+		// Initialize snippets service
+		snippets := core.NewSnippetsService(store)
+
 		s.store = store
 		s.mgr = mgr
 		s.installer = installer
 		s.engine = engine
+		s.snippets = snippets
+		s.textExpander = platform.NewTextExpander()
+
+		if enabled, err := s.SnippetsEnabled(); err == nil && enabled {
+			if err := s.refreshTextExpander(); err != nil {
+				log.Printf("snippets: start expander: %v", err)
+			}
+		}
 	})
 	return s.initErr
 }
@@ -91,6 +105,11 @@ func (s *SearchService) ServiceStartup(_ context.Context, _ application.ServiceO
 // ServiceShutdown stops the plugin runtimes first (so in-flight plugin calls
 // finish against a live store), then closes the usage store.
 func (s *SearchService) ServiceShutdown() error {
+	if s.textExpander != nil {
+		if err := s.textExpander.Stop(); err != nil {
+			log.Printf("snippets: stop expander: %v", err)
+		}
+	}
 	if s.mgr != nil {
 		s.mgr.Shutdown()
 	}
@@ -428,4 +447,138 @@ func (s *SearchService) AllPlugins() ([]kyvroplugin.PluginInfo, error) {
 	})
 
 	return result, nil
+}
+
+// Snippets methods
+
+// Snippets returns all configured text snippets.
+func (s *SearchService) Snippets() ([]core.Snippet, error) {
+	if s.snippets == nil {
+		return []core.Snippet{}, nil
+	}
+	return s.snippets.List()
+}
+
+// AddSnippet adds a new text snippet.
+func (s *SearchService) AddSnippet(trigger, replacement string) error {
+	if s.snippets == nil {
+		return fmt.Errorf("snippets service not initialized")
+	}
+	if err := s.snippets.Add(core.Snippet{
+		Trigger:     trigger,
+		Replacement: replacement,
+	}); err != nil {
+		return err
+	}
+	return s.refreshTextExpanderIfEnabled()
+}
+
+// RemoveSnippet removes a text snippet by trigger.
+func (s *SearchService) RemoveSnippet(trigger string) error {
+	if s.snippets == nil {
+		return fmt.Errorf("snippets service not initialized")
+	}
+	if err := s.snippets.Remove(trigger); err != nil {
+		return err
+	}
+	return s.refreshTextExpanderIfEnabled()
+}
+
+// SetSnippetEnabled enables or disables a snippet.
+func (s *SearchService) SetSnippetEnabled(trigger string, enabled bool) error {
+	if s.snippets == nil {
+		return fmt.Errorf("snippets service not initialized")
+	}
+	if err := s.snippets.SetEnabled(trigger, enabled); err != nil {
+		return err
+	}
+	return s.refreshTextExpanderIfEnabled()
+}
+
+// SnippetsEnabled checks if text expansion is globally enabled.
+func (s *SearchService) SnippetsEnabled() (bool, error) {
+	if s.store == nil {
+		return false, fmt.Errorf("search service not started")
+	}
+	v, _, err := s.store.GetNS(settingsNamespace, "snippets-enabled")
+	if err != nil {
+		return false, err
+	}
+	// Default to enabled if not set
+	if v == "" || v == "true" {
+		return true, nil
+	}
+	return false, nil
+}
+
+// SetSnippetsEnabled enables or disables text expansion globally.
+func (s *SearchService) SetSnippetsEnabled(enabled bool) error {
+	if s.store == nil {
+		return fmt.Errorf("search service not started")
+	}
+	value := "true"
+	if !enabled {
+		value = "false"
+	}
+
+	// Save to store first
+	if err := s.store.PutNS(settingsNamespace, "snippets-enabled", value); err != nil {
+		return err
+	}
+
+	if enabled {
+		return s.refreshTextExpander()
+	}
+	if s.textExpander != nil {
+		return s.textExpander.Stop()
+	}
+
+	return nil
+}
+
+// SnippetAccessibilityGranted reports whether the current Kyvro process has
+// macOS Accessibility permission required for global text expansion.
+func (s *SearchService) SnippetAccessibilityGranted() (bool, error) {
+	if s.textExpander == nil {
+		return false, fmt.Errorf("text expander not initialized")
+	}
+	return s.textExpander.IsEnabled()
+}
+
+// RequestSnippetAccessibility asks macOS to grant Accessibility permission to
+// the current Kyvro process.
+func (s *SearchService) RequestSnippetAccessibility() error {
+	if s.textExpander == nil {
+		return fmt.Errorf("text expander not initialized")
+	}
+	return s.textExpander.RequestPermissions()
+}
+
+func (s *SearchService) refreshTextExpanderIfEnabled() error {
+	enabled, err := s.SnippetsEnabled()
+	if err != nil {
+		return err
+	}
+	if !enabled {
+		return nil
+	}
+	return s.refreshTextExpander()
+}
+
+func (s *SearchService) refreshTextExpander() error {
+	if s.textExpander == nil || s.snippets == nil {
+		return nil
+	}
+	snippets, err := s.snippets.GetEnabled()
+	if err != nil {
+		return err
+	}
+	enabledMap := make(map[string]string, len(snippets))
+	for trigger, sn := range snippets {
+		enabledMap[trigger] = sn.Replacement
+	}
+	if len(enabledMap) == 0 {
+		return s.textExpander.Stop()
+	}
+	return s.textExpander.Start(enabledMap)
 }

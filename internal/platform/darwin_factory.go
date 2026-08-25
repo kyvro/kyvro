@@ -15,3 +15,6 @@ func OpenURL(browserApp, url string) error { return darwin.OpenURL(browserApp, u
 
 // InstalledBrowsers lists browser app names usable with OpenURL.
 func InstalledBrowsers() []string { return darwin.InstalledBrowsers() }
+
+// NewTextExpander returns the macOS text expander.
+func NewTextExpander() TextExpander { return darwin.NewTextExpander() }

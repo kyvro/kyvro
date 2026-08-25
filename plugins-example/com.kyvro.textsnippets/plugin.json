@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "com.kyvro.textsnippets",
+  "name": "Text Snippets",
+  "version": "1.0.0",
+  "description": "Dynamic date/time functions for Text Snippets",
+  "author": { "name": "Kyvro" },
+  "main": "index.js",
+  "minHostVersion": "0.1.0",
+  "platforms": ["darwin", "windows", "linux"],
+  "activationEvents": ["onStartup"],
+  "permissions": []
+}

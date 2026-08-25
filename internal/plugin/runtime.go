@@ -185,6 +185,52 @@ func (r *jsRuntime) buildContext(vm *goja.Runtime) goja.Value {
 		})
 	}
 	ctx.Set("log", lg)
+
+	// Add template rendering support
+	tpl := vm.NewObject()
+	tpl.Set("render", func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) < 1 {
+			return vm.ToValue("")
+		}
+		template := call.Argument(0).String()
+		result := core.RenderTemplate(template)
+		return vm.ToValue(result)
+	})
+	// Allow plugins to register custom template functions
+	// Usage: ctx.template.registerFunc("upper", (args) => args[0].toUpperCase())
+	tpl.Set("registerFunc", func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) < 2 {
+			panic(vm.NewGoError(errors.New("registerFunc requires 2 arguments: name and function")))
+		}
+		name := call.Argument(0).String()
+		fnVal := call.Argument(1)
+
+		// Verify it's a function
+		fnObj, ok := goja.AssertFunction(fnVal)
+		if !ok {
+			panic(vm.NewGoError(errors.New("second argument must be a function")))
+		}
+
+		// Capture the vm for later calls
+		fn := func(args ...string) (string, error) {
+			vmArgs := make([]goja.Value, len(args))
+			for i, arg := range args {
+				vmArgs[i] = vm.ToValue(arg)
+			}
+			result, err := fnObj(goja.Undefined(), vmArgs...)
+			if err != nil {
+				return "", wrapJS(r.pluginID, err)
+			}
+			if result == nil || goja.IsUndefined(result) || goja.IsNull(result) {
+				return "", nil
+			}
+			return result.ToString().String(), nil
+		}
+		core.RegisterTemplateFunc(name, fn)
+		return nil
+	})
+	ctx.Set("template", tpl)
+
 	return ctx
 }
 

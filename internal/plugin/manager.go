@@ -176,13 +176,17 @@ func (m *Manager) ListPlugins() []PluginInfo {
 	defer m.mu.RUnlock()
 	out := make([]PluginInfo, 0, len(m.plugins))
 	for _, lp := range m.plugins {
+		authorName := ""
+		if lp.manifest.Author != nil {
+			authorName = lp.manifest.Author.Name
+		}
 		info := PluginInfo{
 			ID:           lp.manifest.ID,
 			Name:         lp.manifest.DisplayName(),
 			Version:      lp.manifest.Version,
 			Description:  lp.manifest.Description,
 			Permissions:  lp.manifest.Permissions,
-			Author:       lp.manifest.Author.Name,
+			Author:       authorName,
 			IconPath:     lp.rt.iconPath,
 			Disabled:     lp.disabled,
 			AutoDisabled: lp.disabled && lp.rt.Strikes() >= disableStrikes,

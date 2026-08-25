@@ -28,3 +28,16 @@ type AppSource interface {
 type AppLauncher interface {
 	Launch(app core.AppEntry) error
 }
+
+// TextExpander provides global text expansion functionality.
+type TextExpander interface {
+	// Start begins listening for keyboard events and expanding snippets.
+	// The enabled map contains trigger->replacement pairs.
+	Start(enabled map[string]string) error
+	// Stop stops the text expansion listener.
+	Stop() error
+	// IsEnabled checks if the system has granted the required permissions.
+	IsEnabled() (bool, error)
+	// RequestPermissions prompts the user to grant required permissions.
+	RequestPermissions() error
+}

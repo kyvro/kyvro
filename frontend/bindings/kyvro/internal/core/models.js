@@ -186,6 +186,66 @@ export class SearchResult {
     }
 }
 
+/**
+ * Snippet represents a text expansion trigger and its replacement.
+ */
+export class Snippet {
+    /**
+     * Creates a new Snippet instance.
+     * @param {Partial<Snippet>} [$$source = {}] - The source object to create the Snippet.
+     */
+    constructor($$source = {}) {
+        if (!("trigger" in $$source)) {
+            /**
+             * Trigger is the text that triggers expansion (e.g., "dd").
+             * @member
+             * @type {string}
+             */
+            this["trigger"] = "";
+        }
+        if (!("replacement" in $$source)) {
+            /**
+             * Replacement is the text that replaces the trigger (e.g., "20260825").
+             * @member
+             * @type {string}
+             */
+            this["replacement"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * CreatedAt is when this snippet was created.
+             * @member
+             * @type {Date | undefined}
+             */
+            this["createdAt"] = undefined;
+        }
+        if (!("enabled" in $$source)) {
+            /**
+             * Enabled determines if this snippet is active.
+             * @member
+             * @type {boolean}
+             */
+            this["enabled"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Snippet instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {Snippet}
+     */
+    static createFrom($$source = {}) {
+        const $$createField2_0 = $Create.DateFromTime;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("createdAt" in $$parsedSource) {
+            $$parsedSource["createdAt"] = $$createField2_0($$parsedSource["createdAt"]);
+        }
+        return new Snippet(/** @type {Partial<Snippet>} */($$parsedSource));
+    }
+}
+
 // Private type creation functions
 const $$createType0 = $Create.Array($Create.Any);
 const $$createType1 = Action.createFrom;

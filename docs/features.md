@@ -60,21 +60,32 @@ score = 模糊匹配分 + 8 × log₂(启动次数 + 1) + 12 × 2^(−距上次�
 - bbolt 单文件数据库：`~/Library/Application Support/Kyvro/data.db`
 - 每次启动应用/打开搜索后记录 `count` 与 `lastUsed`，重启后 frecency 排序依然生效
 
-### 插件系统（M0+M1）
+### Text Snippets（全局文本扩展）
 
-按 `docs/launcher-plugin-spec-v0.1.md` 落地插件核心能力（M2+ 的市场、安装升级、Secrets、network/filesystem/shell/clipboard API、UI DSL、后台任务均未实现）。
+- 全局键盘监听：任何软件中输入触发词后自动扩展为替换文本
+- 静态文本：直接替换为固定内容（如 `dd` → `Dear Team`）
+- 动态模板：支持 `${func("args")}` 语法，由插件提供动态能力
+  - 官方 Text Snippets Plugin 提供 `${date("format")}` 等函数
+  - `${date("YYMMDD")}` → `260825`（当前日期）
+  - `${date("YYYY-MM-DD")}` → `2026-08-25`
+  - `${now("HH:mm:ss")}` → `14:30:00`（当前时间）
+  - `${timestamp()}` → `1724587800000`（Unix 时间戳）
+  - `${uuid()}` → `550e8400-e29b-41d4-a716-446655440000`（随机 UUID）
+  - 支持日期格式：`YYYY`（4位年份）、`YY`（2位年份）、`MM`（月份）、`DD`（日期）、`HH`（24小时）、`mm`（分钟）、`ss`（秒）
+- 可扩展：插件可注册自定义模板函数（详见 plugins.md）
+- 管理界面：设置窗口 Text Snippets 栏支持添加/删除/启用/禁用片段、全局开关
+- 权限要求：需要 macOS 辅助功能权限（Accessibility），设置界面可引导授权
+- 存储位置：`~/Library/Application Support/Kyvro/data.db`（`snippets` namespace）
 
-- **加载与布局**：插件安装目录 `~/Library/Application Support/Kyvro/plugins/`（spec §11：`<id>/<version>/plugin.json`，`current.json` 可固定版本，缺省取 SemVer 最大版本目录）；启动时全量扫描，单插件损坏只记日志跳过，不影响宿主与其他插件
-- **Manifest 校验**：schemaVersion=1、反向域名 id（须与目录名一致）、SemVer version/minHostVersion（宿主 0.1.0）、main 路径防逃逸（禁绝对路径与 `..`）、平台过滤、activationEvents 校验（`onCommand:` 必须引用已声明命令）；权限框架骨架：默认拒绝，`storage` 声明即授权（V1），其余权限（network/filesystem/shell/clipboard/secrets/background/system）解析但调用即 `CAPABILITY_UNAVAILABLE`
-- **运行时**：goja（`github.com/dop251/goja`，pin 伪版本 `v0.0.0-20260822123354-58e940e0d230`，无稳定 tag）；每插件一个 VM + 独占 worker goroutine，外部调用经 channel 派发；**仅支持 CommonJS（`module.exports`）**——goja 无 ESM，spec 示例的 `export const` 需等 M2 esbuild 工具链
-- **搜索接入**：引擎 provider 顺序 `[calc, apps, plugins, web]`（插件严格位于 apps 之后、web 兜底之前）：
-  - 命令浮出：manifest commands 对 Title+Keywords 模糊匹配（复用 `sahilm/fuzzy`），无需调用 JS；命中行 ID `plugin:<pid>:cmd:<cid>`，参数以 `Args=[query]` 透传（V1 简化）
-  - 实时搜索：仅当插件导出 `provider.search` 且声明 `onSearchPrefix` 且查询命中前缀（大小写不敏感）时，并行调用（软超时 150ms），按插件 id 序合并；JS 返回的 scoreHint clamp 到 [0,50]，非法条目丢弃不失败整批
-- **结果与 Action**：JS 结果动作三种：`open-url`（浏览器打开）、`copy`（复制）、`callback`（回插件二级处理）；回车触发命令/回调时返回二级结果列表（新绑定 `RunAction`，5s 超时），行可继续 Enter 执行 open-url/copy，`Esc` 返回一级列表，输入则自动退回一级
-- **稳定性**：JS 异常/panic 一律转 `PluginError`（spec §18 错误码），宿主永不崩；搜索超时经 `vm.Interrupt` 跨 goroutine 中断，迟到结果丢弃，VM 复用（中断后不重建）；连续 3 次超时自动禁用该插件（移出搜索轮换）；activate 支持 Promise（有界等待）
-- **插件存储**：复用 data.db，每插件独立 bucket `plugin:<pluginID>`（string→string），数据跨版本升级/重载持久；JS 侧仅当 storage 权限授予时可见 `ctx.storage`，另有 `ctx.log.{info,warn,error}`
-- 示例插件：`plugins-example/com.example.encode`（b64 前缀搜索 + URL Encode 命令 + storage 计数），README 含手动安装说明
-- 官方插件：`plugins-official/`（长期维护，随 Kyvro 版本验证）——首个插件 `com.kyvro.github`：`gh <query>` 打开 GitHub 仓库搜索，`gh owner/repo` 直接打开仓库；无需权限（宿主侧 open-url）；`ghost` 等 gh 开头普通单词不拦截
+### 插件系统
+
+可扩展的插件架构，支持用户和开发者自定义搜索功能与命令。详见 [plugins.md](./plugins.md)。
+
+- **扩展能力**：前缀触发实时搜索、静态命令（模糊匹配浮出）、数据持久化、多种操作类型（打开链接/复制/二级交互）
+- **安装位置**：`~/Library/Application Support/Kyvro/plugins/`
+- **官方插件**：`com.kyvro.github`（GitHub 仓库搜索，`gh <query>` 或 `gh owner/repo`）
+- **示例插件**：`com.example.encode`（Base64 编码/URL 编码，包含 storage 演示）
+- **管理界面**：设置窗口 Plugins 栏支持启用/禁用、查看权限、打开插件目录
 
 ### 设置窗口（通用 / 插件管理 / 关于）
 

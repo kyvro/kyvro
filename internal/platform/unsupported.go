@@ -40,3 +40,21 @@ func OpenURL(browserApp, url string) error {
 
 // InstalledBrowsers returns no browsers on unported platforms.
 func InstalledBrowsers() []string { return nil }
+
+// stubExpander is the placeholder TextExpander for unported platforms.
+type stubExpander struct{}
+
+// NewTextExpander returns a stub text expander.
+func NewTextExpander() TextExpander { return stubExpander{} }
+
+// Start always reports the platform as unsupported.
+func (stubExpander) Start(map[string]string) error { return ErrUnsupported }
+
+// Stop is a no-op.
+func (stubExpander) Stop() error { return nil }
+
+// IsEnabled always returns false (not supported).
+func (stubExpander) IsEnabled() (bool, error) { return false, ErrUnsupported }
+
+// RequestPermissions always reports the platform as unsupported.
+func (stubExpander) RequestPermissions() error { return ErrUnsupported }

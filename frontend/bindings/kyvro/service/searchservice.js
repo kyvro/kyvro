@@ -25,6 +25,16 @@ import * as core$0 from "../internal/core/models.js";
 import * as plugin$0 from "../internal/plugin/models.js";
 
 /**
+ * AddSnippet adds a new text snippet.
+ * @param {string} trigger
+ * @param {string} replacement
+ * @returns {$CancellablePromise<void>}
+ */
+export function AddSnippet(trigger, replacement) {
+    return $Call.ByID(807125279, trigger, replacement);
+}
+
+/**
  * AllPlugins combines installed and available plugins for the settings UI.
  * @returns {$CancellablePromise<plugin$0.PluginInfo[]>}
  */
@@ -95,6 +105,24 @@ export function Plugins() {
 }
 
 /**
+ * RemoveSnippet removes a text snippet by trigger.
+ * @param {string} trigger
+ * @returns {$CancellablePromise<void>}
+ */
+export function RemoveSnippet(trigger) {
+    return $Call.ByID(2574413044, trigger);
+}
+
+/**
+ * RequestSnippetAccessibility asks macOS to grant Accessibility permission to
+ * the current Kyvro process.
+ * @returns {$CancellablePromise<void>}
+ */
+export function RequestSnippetAccessibility() {
+    return $Call.ByID(1927811739);
+}
+
+/**
  * RevealPluginsFolder opens the plugins directory in Finder (created on
  * demand), the install/uninstall entry point alongside the settings list.
  * @returns {$CancellablePromise<void>}
@@ -151,6 +179,52 @@ export function SetPluginEnabled(id, enabled) {
 }
 
 /**
+ * SetSnippetEnabled enables or disables a snippet.
+ * @param {string} trigger
+ * @param {boolean} enabled
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetSnippetEnabled(trigger, enabled) {
+    return $Call.ByID(1740263623, trigger, enabled);
+}
+
+/**
+ * SetSnippetsEnabled enables or disables text expansion globally.
+ * @param {boolean} enabled
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetSnippetsEnabled(enabled) {
+    return $Call.ByID(166999392, enabled);
+}
+
+/**
+ * SnippetAccessibilityGranted reports whether the current Kyvro process has
+ * macOS Accessibility permission required for global text expansion.
+ * @returns {$CancellablePromise<boolean>}
+ */
+export function SnippetAccessibilityGranted() {
+    return $Call.ByID(556355039);
+}
+
+/**
+ * Snippets returns all configured text snippets.
+ * @returns {$CancellablePromise<core$0.Snippet[]>}
+ */
+export function Snippets() {
+    return $Call.ByID(20510241).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType8($result);
+    }));
+}
+
+/**
+ * SnippetsEnabled checks if text expansion is globally enabled.
+ * @returns {$CancellablePromise<boolean>}
+ */
+export function SnippetsEnabled() {
+    return $Call.ByID(2161103978);
+}
+
+/**
  * UninstallPlugin removes an installed plugin by ID.
  * @param {string} id
  * @returns {$CancellablePromise<void>}
@@ -175,3 +249,5 @@ const $$createType3 = $Create.Array($$createType2);
 const $$createType4 = $Create.Array($Create.Any);
 const $$createType5 = core$0.SearchResult.createFrom;
 const $$createType6 = $Create.Array($$createType5);
+const $$createType7 = core$0.Snippet.createFrom;
+const $$createType8 = $Create.Array($$createType7);

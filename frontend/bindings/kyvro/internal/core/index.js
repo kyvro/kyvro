@@ -5,5 +5,6 @@
 export {
     Action,
     ActionKind,
-    SearchResult
+    SearchResult,
+    Snippet
 } from "./models.js";
