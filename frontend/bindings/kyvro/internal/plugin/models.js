@@ -7,7 +7,7 @@
 import { Create as $Create } from "@wailsio/runtime";
 
 /**
- * PluginInfo describes a loaded plugin for the settings UI.
+ * PluginInfo describes a plugin for the settings UI, combining local and remote metadata.
  */
 export class PluginInfo {
     /**
@@ -50,6 +50,13 @@ export class PluginInfo {
              */
             this["Permissions"] = [];
         }
+        if (!("Author" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["Author"] = "";
+        }
         if (!("IconPath" in $$source)) {
             /**
              * absolute manifest-icon path ("" when none)
@@ -57,6 +64,14 @@ export class PluginInfo {
              * @type {string}
              */
             this["IconPath"] = "";
+        }
+        if (!("IconURL" in $$source)) {
+            /**
+             * remote icon URL for registry plugins
+             * @member
+             * @type {string}
+             */
+            this["IconURL"] = "";
         }
         if (!("Disabled" in $$source)) {
             /**
@@ -74,6 +89,21 @@ export class PluginInfo {
              */
             this["AutoDisabled"] = false;
         }
+        if (!("Status" in $$source)) {
+            /**
+             * @member
+             * @type {PluginStatus}
+             */
+            this["Status"] = PluginStatus.$zero;
+        }
+        if (!("DownloadURL" in $$source)) {
+            /**
+             * URL for downloading from registry
+             * @member
+             * @type {string}
+             */
+            this["DownloadURL"] = "";
+        }
 
         Object.assign(this, $$source);
     }
@@ -90,6 +120,119 @@ export class PluginInfo {
             $$parsedSource["Permissions"] = $$createField4_0($$parsedSource["Permissions"]);
         }
         return new PluginInfo(/** @type {Partial<PluginInfo>} */($$parsedSource));
+    }
+}
+
+/**
+ * PluginStatus represents the installation and enablement state of a plugin.
+ * @readonly
+ * @enum {string}
+ */
+export const PluginStatus = {
+    /**
+     * The Go zero value for the underlying type of the enum.
+     */
+    $zero: "",
+
+    /**
+     * Available in registry but not installed
+     */
+    StatusNotInstalled: "not_installed",
+
+    /**
+     * Installed but disabled
+     */
+    StatusInstalled: "installed",
+
+    /**
+     * Installed and enabled
+     */
+    StatusEnabled: "enabled",
+};
+
+/**
+ * RemotePlugin represents a plugin available for installation from the registry.
+ */
+export class RemotePlugin {
+    /**
+     * Creates a new RemotePlugin instance.
+     * @param {Partial<RemotePlugin>} [$$source = {}] - The source object to create the RemotePlugin.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (!("version" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["version"] = "";
+        }
+        if (!("description" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["description"] = "";
+        }
+        if (!("author" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["author"] = "";
+        }
+        if (!("download_url" in $$source)) {
+            /**
+             * URL to download plugin archive
+             * @member
+             * @type {string}
+             */
+            this["download_url"] = "";
+        }
+        if (!("icon_url" in $$source)) {
+            /**
+             * URL to plugin icon
+             * @member
+             * @type {string}
+             */
+            this["icon_url"] = "";
+        }
+        if (!("updated_at" in $$source)) {
+            /**
+             * @member
+             * @type {Date}
+             */
+            this["updated_at"] = new Date("0001-01-01T00:00:00.000Z");
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new RemotePlugin instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {RemotePlugin}
+     */
+    static createFrom($$source = {}) {
+        const $$createField7_0 = $Create.DateFromTime;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("updated_at" in $$parsedSource) {
+            $$parsedSource["updated_at"] = $$createField7_0($$parsedSource["updated_at"]);
+        }
+        return new RemotePlugin(/** @type {Partial<RemotePlugin>} */($$parsedSource));
     }
 }
 

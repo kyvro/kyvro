@@ -4,6 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Kyvro</title>
+    <script>
+      if (window.location.hash === "#settings") {
+        document.documentElement.dataset.kyvroWindow = "settings";
+      }
+    </script>
+    <style>
+      html[data-kyvro-window="settings"],
+      html[data-kyvro-window="settings"] body,
+      html[data-kyvro-window="settings"] #app {
+        background: #1b1b20;
+      }
+    </style>
   </head>
   <body>
     <div id="app"></div>

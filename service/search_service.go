@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -39,6 +40,7 @@ type SearchService struct {
 	store    *core.Store
 	engine   *core.Engine
 	mgr      *kyvroplugin.Manager
+	installer *kyvroplugin.Installer
 	initErr  error
 
 	mu   sync.Mutex
@@ -69,6 +71,7 @@ func (s *SearchService) ServiceStartup(_ context.Context, _ application.ServiceO
 		}
 		mgr := kyvroplugin.NewManager(s.pluginsDir, store, nil)
 		mgr.LoadAll() // single-plugin failures are logged, not fatal
+		installer := kyvroplugin.NewInstaller(s.pluginsDir)
 		appsProvider := apps.New(s.source)
 		engine := core.NewEngine(
 			[]core.Provider{calc.New(), appsProvider, mgr.Provider(), web.New()},
@@ -79,6 +82,7 @@ func (s *SearchService) ServiceStartup(_ context.Context, _ application.ServiceO
 
 		s.store = store
 		s.mgr = mgr
+		s.installer = installer
 		s.engine = engine
 	})
 	return s.initErr
@@ -296,4 +300,132 @@ func containsString(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// Remote plugin management methods
+
+// AvailablePlugins fetches the list of plugins available from the official registry.
+func (s *SearchService) AvailablePlugins() ([]kyvroplugin.RemotePlugin, error) {
+	if s.installer == nil {
+		return nil, fmt.Errorf("plugin installer not initialized")
+	}
+	registry := kyvroplugin.NewRegistryClient()
+	return registry.FetchPlugins()
+}
+
+// InstallPlugin installs a plugin from the official registry by ID.
+func (s *SearchService) InstallPlugin(id string) error {
+	if s.installer == nil {
+		return fmt.Errorf("plugin installer not initialized")
+	}
+
+	// Install the plugin
+	if err := s.installer.InstallFromGitHub(id); err != nil {
+		return fmt.Errorf("install plugin: %w", err)
+	}
+
+	// Reload plugins to pick up the newly installed one
+	if s.mgr != nil {
+		s.mgr.LoadAll()
+	}
+
+	return nil
+}
+
+// UninstallPlugin removes an installed plugin by ID.
+func (s *SearchService) UninstallPlugin(id string) error {
+	if s.installer == nil {
+		return fmt.Errorf("plugin installer not initialized")
+	}
+
+	// First, ensure the plugin is stopped
+	if s.mgr != nil {
+		if err := s.mgr.SetEnabled(id, false); err != nil {
+			log.Printf("plugin: disable %s before uninstall: %v", id, err)
+		}
+	}
+
+	// Remove the plugin directory
+	if err := s.installer.Uninstall(id); err != nil {
+		return fmt.Errorf("uninstall plugin: %w", err)
+	}
+
+	// Reload to update the plugin list
+	if s.mgr != nil {
+		s.mgr.LoadAll()
+	}
+
+	return nil
+}
+
+// AllPlugins combines installed and available plugins for the settings UI.
+func (s *SearchService) AllPlugins() ([]kyvroplugin.PluginInfo, error) {
+	if s.mgr == nil || s.installer == nil {
+		return nil, fmt.Errorf("plugin system not initialized")
+	}
+
+	// Get installed plugins
+	installed := make(map[string]kyvroplugin.PluginInfo)
+	for _, p := range s.mgr.ListPlugins() {
+		installed[p.ID] = p
+	}
+
+	// Get available plugins from registry
+	registry := kyvroplugin.NewRegistryClient()
+	available, err := registry.FetchPlugins()
+	if err != nil {
+		log.Printf("plugin: fetch available plugins: %v", err)
+		// Return only installed plugins on registry fetch failure
+		result := make([]kyvroplugin.PluginInfo, 0, len(installed))
+		for _, p := range installed {
+			result = append(result, p)
+		}
+		return result, nil
+	}
+
+	// Merge installed and available plugins
+	pluginMap := make(map[string]kyvroplugin.PluginInfo)
+
+	// Add installed plugins
+	for id, p := range installed {
+		pluginMap[id] = p
+	}
+
+	// Add available plugins that aren't installed
+	for _, remote := range available {
+		if _, exists := installed[remote.ID]; !exists {
+			pluginMap[remote.ID] = kyvroplugin.PluginInfo{
+				ID:          remote.ID,
+				Name:        remote.Name,
+				Version:     remote.Version,
+				Description: remote.Description,
+				Author:      remote.Author,
+				IconURL:     remote.IconURL,
+				Status:      kyvroplugin.StatusNotInstalled,
+				DownloadURL: remote.DownloadURL,
+			}
+		}
+	}
+
+	// Convert map to slice and sort
+	result := make([]kyvroplugin.PluginInfo, 0, len(pluginMap))
+	for _, p := range pluginMap {
+		result = append(result, p)
+	}
+
+	// Sort by status (enabled first, then installed, then not installed) and by name
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Status != result[j].Status {
+			// Order: Enabled > Installed > NotInstalled
+			statusOrder := map[kyvroplugin.PluginStatus]int{
+				kyvroplugin.StatusEnabled:      0,
+				kyvroplugin.StatusInstalled:    1,
+				kyvroplugin.StatusNotInstalled: 2,
+			}
+			return statusOrder[result[i].Status] < statusOrder[result[j].Status]
+		}
+		return result[i].Name < result[j].Name
+	})
+
+	return result, nil
 }

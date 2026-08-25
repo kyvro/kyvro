@@ -25,13 +25,33 @@ import * as core$0 from "../internal/core/models.js";
 import * as plugin$0 from "../internal/plugin/models.js";
 
 /**
+ * AllPlugins combines installed and available plugins for the settings UI.
+ * @returns {$CancellablePromise<plugin$0.PluginInfo[]>}
+ */
+export function AllPlugins() {
+    return $Call.ByID(845651830).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType1($result);
+    }));
+}
+
+/**
+ * AvailablePlugins fetches the list of plugins available from the official registry.
+ * @returns {$CancellablePromise<plugin$0.RemotePlugin[]>}
+ */
+export function AvailablePlugins() {
+    return $Call.ByID(1804721074).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType3($result);
+    }));
+}
+
+/**
  * Browsers lists installed browser names usable as the external browser
  * (empty on platforms without browser detection).
  * @returns {$CancellablePromise<string[]>}
  */
 export function Browsers() {
     return $Call.ByID(1142220318).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType0($result);
+        return $$createType4($result);
     }));
 }
 
@@ -42,6 +62,15 @@ export function Browsers() {
  */
 export function ExternalBrowser() {
     return $Call.ByID(504328536);
+}
+
+/**
+ * InstallPlugin installs a plugin from the official registry by ID.
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function InstallPlugin(id) {
+    return $Call.ByID(1844346045, id);
 }
 
 /**
@@ -61,7 +90,7 @@ export function Launch(id) {
  */
 export function Plugins() {
     return $Call.ByID(444198097).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType2($result);
+        return $$createType1($result);
     }));
 }
 
@@ -86,7 +115,7 @@ export function RevealPluginsFolder() {
  */
 export function RunAction(id) {
     return $Call.ByID(3268022454, id).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType4($result);
+        return $$createType6($result);
     }));
 }
 
@@ -97,7 +126,7 @@ export function RunAction(id) {
  */
 export function Search(query) {
     return $Call.ByID(2004525483, query).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType4($result);
+        return $$createType6($result);
     }));
 }
 
@@ -122,6 +151,15 @@ export function SetPluginEnabled(id, enabled) {
 }
 
 /**
+ * UninstallPlugin removes an installed plugin by ID.
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function UninstallPlugin(id) {
+    return $Call.ByID(1309368692, id);
+}
+
+/**
  * Version returns the Kyvro application version.
  * @returns {$CancellablePromise<string>}
  */
@@ -130,8 +168,10 @@ export function Version() {
 }
 
 // Private type creation functions
-const $$createType0 = $Create.Array($Create.Any);
-const $$createType1 = plugin$0.PluginInfo.createFrom;
-const $$createType2 = $Create.Array($$createType1);
-const $$createType3 = core$0.SearchResult.createFrom;
-const $$createType4 = $Create.Array($$createType3);
+const $$createType0 = plugin$0.PluginInfo.createFrom;
+const $$createType1 = $Create.Array($$createType0);
+const $$createType2 = plugin$0.RemotePlugin.createFrom;
+const $$createType3 = $Create.Array($$createType2);
+const $$createType4 = $Create.Array($Create.Any);
+const $$createType5 = core$0.SearchResult.createFrom;
+const $$createType6 = $Create.Array($$createType5);

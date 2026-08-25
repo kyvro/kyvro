@@ -41,16 +41,29 @@ type loadedPlugin struct {
 	disabled bool
 }
 
-// PluginInfo describes a loaded plugin for the settings UI.
+// PluginStatus represents the installation and enablement state of a plugin.
+type PluginStatus string
+
+const (
+	StatusNotInstalled PluginStatus = "not_installed" // Available in registry but not installed
+	StatusInstalled    PluginStatus = "installed"    // Installed but disabled
+	StatusEnabled      PluginStatus = "enabled"      // Installed and enabled
+)
+
+// PluginInfo describes a plugin for the settings UI, combining local and remote metadata.
 type PluginInfo struct {
 	ID           string
 	Name         string
 	Version      string
 	Description  string
 	Permissions  []string
+	Author       string
 	IconPath     string // absolute manifest-icon path ("" when none)
+	IconURL      string // remote icon URL for registry plugins
 	Disabled     bool   // user- or auto-disabled
 	AutoDisabled bool   // disabled by the 3-strike timeout rule
+	Status       PluginStatus
+	DownloadURL  string // URL for downloading from registry
 }
 
 // stateNamespace is the bbolt namespace persisting user choices ("disabled"
@@ -169,12 +182,19 @@ func (m *Manager) ListPlugins() []PluginInfo {
 			Version:      lp.manifest.Version,
 			Description:  lp.manifest.Description,
 			Permissions:  lp.manifest.Permissions,
+			Author:       lp.manifest.Author.Name,
 			IconPath:     lp.rt.iconPath,
 			Disabled:     lp.disabled,
 			AutoDisabled: lp.disabled && lp.rt.Strikes() >= disableStrikes,
 		}
 		if info.Permissions == nil {
 			info.Permissions = []string{}
+		}
+		// Set status based on disabled state
+		if info.Disabled {
+			info.Status = StatusInstalled
+		} else {
+			info.Status = StatusEnabled
 		}
 		out = append(out, info)
 	}
