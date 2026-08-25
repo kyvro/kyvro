@@ -6,6 +6,7 @@
   "description": "Dynamic date/time functions for Text Snippets",
   "author": { "name": "Kyvro" },
   "main": "index.js",
+  "icon": "icon.svg",
   "minHostVersion": "0.1.0",
   "platforms": ["darwin", "windows", "linux"],
   "activationEvents": ["onStartup"],
