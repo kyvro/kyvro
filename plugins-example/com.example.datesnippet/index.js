@@ -1,6 +1,5 @@
 // Date Snippets Plugin for Kyvro
-// Demonstrates dynamic template rendering in plugins
-// This plugin provides date/time search results using template rendering
+// Demonstrates template function registration for Text Snippets
 
 module.exports.commands = [
   {
@@ -17,7 +16,7 @@ module.exports.commands = [
 
 // Activate the plugin and register date function
 module.exports.activate = (context) => {
-  // Register date function for use in templates
+  // Register date function for use in Text Snippets
   context.template.registerFunc("date", (args) => {
     if (args.length === 0) {
       return new Date().toISOString().split('T')[0];
@@ -46,17 +45,36 @@ module.exports.activate = (context) => {
   context.log.info("Date Snippets plugin activated");
 };
 
-// Provider with dynamic template rendering
+// Format date helper
+function formatDate(date, format) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+
+  return format
+    .replace(/YYYY/g, year)
+    .replace(/YY/g, String(year).slice(-2))
+    .replace(/MM/g, month)
+    .replace(/DD/g, day)
+    .replace(/HH/g, hours)
+    .replace(/mm/g, minutes)
+    .replace(/ss/g, seconds);
+}
+
+// Provider with direct JavaScript (no template rendering needed)
 module.exports.provider = {
   search: async (query) => {
     const results = [];
 
     if (query.length > 0) {
-      // Render current date in various formats using the template API
-      const today = ctx.template.render('${date("YYYY-MM-DD")}');
-      const todayShort = ctx.template.render('${date("YYMMDD")}');
-      const now = ctx.template.render('${date("HH:mm:ss")}');
-      const timestamp = ctx.template.render('${date("YYYYMMDDHHmmss")}');
+      const now = new Date();
+      const today = formatDate(now, "YYYY-MM-DD");
+      const todayShort = formatDate(now, "YYMMDD");
+      const timeNow = formatDate(now, "HH:mm:ss");
+      const timestamp = formatDate(now, "YYYYMMDDHHmmss");
 
       results.push({
         id: "date-today-full",
@@ -76,10 +94,10 @@ module.exports.provider = {
 
       results.push({
         id: "date-now",
-        title: now,
+        title: timeNow,
         subtitle: "Current time (HH:mm:ss)",
         scoreHint: 10,
-        action: { kind: "copy", arg: now }
+        action: { kind: "copy", arg: timeNow }
       });
 
       results.push({
@@ -97,8 +115,10 @@ module.exports.provider = {
 
 // Command callback for quick access
 module.exports.onCommand = async (commandId) => {
+  const now = new Date();
+
   if (commandId === "date.today") {
-    const dateStr = ctx.template.render('${date("YYYY-MM-DD")}');
+    const dateStr = formatDate(now, "YYYY-MM-DD");
     return [{
       id: "today-result",
       title: dateStr,
@@ -108,7 +128,7 @@ module.exports.onCommand = async (commandId) => {
   }
 
   if (commandId === "date.now") {
-    const timeStr = ctx.template.render('${date("HH:mm:ss")}');
+    const timeStr = formatDate(now, "HH:mm:ss");
     return [{
       id: "now-result",
       title: timeStr,

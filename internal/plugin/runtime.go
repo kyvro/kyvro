@@ -186,18 +186,10 @@ func (r *jsRuntime) buildContext(vm *goja.Runtime) goja.Value {
 	}
 	ctx.Set("log", lg)
 
-	// Add template rendering support
-	tpl := vm.NewObject()
-	tpl.Set("render", func(call goja.FunctionCall) goja.Value {
-		if len(call.Arguments) < 1 {
-			return vm.ToValue("")
-		}
-		template := call.Argument(0).String()
-		result := core.RenderTemplate(template)
-		return vm.ToValue(result)
-	})
-	// Allow plugins to register custom template functions
+	// Add template function registration support
+	// Plugins can register functions for use in Text Snippets
 	// Usage: ctx.template.registerFunc("upper", (args) => args[0].toUpperCase())
+	tpl := vm.NewObject()
 	tpl.Set("registerFunc", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 2 {
 			panic(vm.NewGoError(errors.New("registerFunc requires 2 arguments: name and function")))

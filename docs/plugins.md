@@ -13,7 +13,7 @@
 
 ### 动态模板
 
-插件系统提供可扩展的模板渲染能力，用于 Text Snippets 和插件内部：
+插件系统提供模板函数注册能力，用于 Text Snippets 动态内容：
 
 #### 模板语法
 
@@ -23,7 +23,7 @@ ${func("arg1","arg2")}
 
 #### 注册模板函数
 
-插件可以在 `activate` 钩子中注册自定义模板函数：
+插件可以在 `activate` 钩子中注册模板函数，供 Text Snippets 使用：
 
 ```javascript
 module.exports.activate = (ctx) => {
@@ -44,24 +44,6 @@ module.exports.activate = (ctx) => {
 };
 ```
 
-#### 渲染模板
-
-在插件中使用 `ctx.template.render()` 渲染模板：
-
-```javascript
-module.exports.provider = {
-  search: async (query) => {
-    const dateStr = ctx.template.render('${date("YYYY-MM-DD")}');
-    const uuid = ctx.template.render('${uuid()}');
-    return [{
-      id: "result-1",
-      title: `Today: ${dateStr}`,
-      action: { kind: "copy", arg: dateStr }
-    }];
-  }
-};
-```
-
 #### 官方 Text Snippets Plugin
 
 官方插件 `com.kyvro.textsnippets` 提供内置模板函数：
@@ -70,6 +52,7 @@ module.exports.provider = {
 - `${now("format")}` - 当前时间（别名）
 - `${today("format")}` - 今天日期
 - `${timestamp()}` - Unix 时间戳
+- `${uuid()}` - 随机 UUID
 - `${uuid()}` - 随机 UUID
 
 **格式占位符：**
