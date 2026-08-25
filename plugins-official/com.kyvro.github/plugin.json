@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "com.kyvro.github",
+  "name": "GitHub Search",
+  "version": "0.1.0",
+  "description": "Open GitHub searches and repositories from the launcher (gh <query>)",
+  "author": { "name": "Kyvro" },
+  "main": "index.js",
+  "icon": "icon.svg",
+  "minHostVersion": "0.1.0",
+  "platforms": ["darwin", "windows", "linux"],
+  "activationEvents": ["onSearchPrefix:gh"]
+}

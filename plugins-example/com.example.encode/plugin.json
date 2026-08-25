@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "com.example.encode",
+  "name": "Encode",
+  "version": "0.1.0",
+  "description": "Base64 and URL encode/decode tools (Kyvro plugin system example)",
+  "author": { "name": "Kyvro Examples" },
+  "main": "index.js",
+  "minHostVersion": "0.1.0",
+  "platforms": ["darwin", "windows", "linux"],
+  "activationEvents": ["onSearchPrefix:b64", "onCommand:encode.url"],
+  "permissions": ["storage"],
+  "commands": [
+    {
+      "id": "encode.url",
+      "title": "URL Encode",
+      "subtitle": "Encode or decode text as a URL component",
+      "keywords": ["encode", "decode", "url", "uri"]
+    }
+  ]
+}

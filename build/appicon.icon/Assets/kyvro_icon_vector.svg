@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="172" y1="90" x2="880" y2="932" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1B2330"/>
+      <stop offset="0.48" stop-color="#111827"/>
+      <stop offset="1" stop-color="#0B0F14"/>
+    </linearGradient>
+    <linearGradient id="beam" x1="275" y1="236" x2="750" y2="794" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8CF6D4"/>
+      <stop offset="0.48" stop-color="#32C7FF"/>
+      <stop offset="1" stop-color="#B9A7FF"/>
+    </linearGradient>
+    <linearGradient id="warm" x1="631" y1="594" x2="769" y2="732" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFE28A"/>
+      <stop offset="1" stop-color="#FF8A4C"/>
+    </linearGradient>
+    <filter id="softGlow" x="104" y="92" width="816" height="836" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feBlend in="SourceGraphic" in2="BackgroundImageFix" mode="normal" result="shape"/>
+      <feGaussianBlur result="effect1_foregroundBlur_1_1" stdDeviation="30"/>
+    </filter>
+    <filter id="markShadow" x="210" y="198" width="604" height="622" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="18"/>
+      <feGaussianBlur stdDeviation="18"/>
+      <feComposite in2="hardAlpha" operator="out"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.0117647 0 0 0 0 0.027451 0 0 0 0 0.0392157 0 0 0 0.45 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
+    </filter>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="210" fill="url(#bg)"/>
+  <rect x="79" y="79" width="866" height="866" rx="197" stroke="white" stroke-opacity="0.08" stroke-width="30"/>
+  <g filter="url(#softGlow)" opacity="0.72">
+    <path d="M293 274C397 199 541 185 658 244C773 302 842 426 820 557C798 690 688 782 556 804C422 827 285 775 221 655C158 537 189 348 293 274Z" fill="#2BD4B7" fill-opacity="0.26"/>
+    <path d="M612 588L758 734" stroke="#FFB55F" stroke-width="88" stroke-linecap="round"/>
+  </g>
+  <g filter="url(#markShadow)">
+    <path d="M318 294C318 260.863 344.863 234 378 234C411.137 234 438 260.863 438 294V626H656C689.137 626 716 652.863 716 686C716 719.137 689.137 746 656 746H378C344.863 746 318 719.137 318 686V294Z" fill="url(#beam)"/>
+    <path d="M618.168 521.725C594.737 498.294 594.737 460.304 618.168 436.873C641.6 413.441 679.589 413.441 703.021 436.873L774.727 508.579C798.159 532.011 798.159 570 774.727 593.432C751.295 616.863 713.306 616.863 689.874 593.432L618.168 521.725Z" fill="#EAFBFF"/>
+    <circle cx="694" cy="662" r="82" fill="url(#warm)"/>
+    <circle cx="694" cy="662" r="36" fill="#FFF5CE"/>
+  </g>
+  <path d="M238 243C279 202 336 178 398 178" stroke="white" stroke-opacity="0.18" stroke-width="28" stroke-linecap="round"/>
+</svg>

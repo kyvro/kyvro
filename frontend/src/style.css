@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+/* The NSWindow provides the translucency; the page itself must stay
+   transparent so the vibrancy shows through. */
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  /* Launcher text is always light; avoid system-text colour leakage. */
+  color-scheme: dark;
+}
+
+input {
+  color-scheme: dark;
+}

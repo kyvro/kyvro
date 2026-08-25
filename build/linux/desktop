@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=Lumo
+Comment=Lumo launcher
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/lumo %u
+Terminal=false
+Type=Application
+Icon=lumo
+Categories=Utility;
+StartupWMClass=lumo
+
+ 

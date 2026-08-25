@@ -1,0 +1,21 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="174" y1="92" x2="850" y2="932" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="0.58" stop-color="#1F2937"/>
+      <stop offset="1" stop-color="#0F172A"/>
+    </linearGradient>
+    <linearGradient id="beam" x1="360" y1="244" x2="704" y2="700" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7DD3FC"/>
+      <stop offset="0.45" stop-color="#34D399"/>
+      <stop offset="1" stop-color="#F8FAFC"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="28" stdDeviation="34" flood-color="#020617" flood-opacity="0.38"/>
+    </filter>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="226" fill="url(#bg)"/>
+  <path d="M250 704C250 660.817 285.817 625 329 625H695C738.183 625 774 660.817 774 704C774 747.183 738.183 783 695 783H329C285.817 783 250 747.183 250 704Z" fill="#F8FAFC" filter="url(#softShadow)"/>
+  <path d="M505 219C523.624 205.141 550 218.432 550 241.648V426H714.5C739.277 426 750.99 456.604 732.44 473.043L456.44 717.643C437.97 734.009 409 720.894 409 696.215V512H244.5C219.723 512 208.01 481.396 226.56 464.957L505 219Z" fill="url(#beam)" filter="url(#softShadow)"/>
+  <circle cx="688" cy="704" r="34" fill="#0F172A" opacity="0.92"/>
+</svg>
