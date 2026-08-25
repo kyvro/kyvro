@@ -349,6 +349,46 @@ module.exports.onCommand = async (cmdId, args) => {
 };
 ```
 
+### Text Snippets（`plugins-official/com.kyvro.textsnippets`）
+
+官方插件，为 Text Snippets 提供日期/时间和 UUID 函数：
+
+```json
+{
+  "id": "com.kyvro.textsnippets",
+  "name": "Text Snippets",
+  "main": "index.js",
+  "activationEvents": ["onStartup"]
+}
+```
+
+```javascript
+// index.js
+module.exports.activate = (ctx) => {
+  // 注册日期函数
+  ctx.template.registerFunc("date", (args) => {
+    const format = args[0] || "YYYY-MM-DD";
+    const now = new Date();
+    // 格式化日期...
+    return formattedDate;
+  });
+
+  // 注册其他函数
+  ctx.template.registerFunc("uuid", (args) => {
+    return crypto.randomUUID();
+  });
+};
+```
+
+**Text Snippet 示例：**
+```json
+{
+  "trigger": "dd",
+  "replacement": "${date(\"YYMMDD\")}"
+}
+```
+输入 `dd` → 扩展为 `260825`（当前日期）
+
 ### GitHub 搜索（`plugins-official/com.kyvro.github`）
 
 - 前缀：`gh <query>` 打开 GitHub 仓库搜索
