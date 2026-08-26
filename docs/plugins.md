@@ -1,6 +1,6 @@
-# 插件系统详细说明
+# 插件系统
 
-本文档详细描述 Kyvro 的插件系统架构与实现。概述见 [features.md](./features.md)。
+本文档描述 Kyvro 的插件系统架构与开发指南。插件市场信息见 [plugin-marketplace.md](./plugin-marketplace.md)。
 
 ## 设计目标
 
@@ -141,6 +141,7 @@ main.go
 
 | 事件类型 | 说明 | 示例 |
 |---------|------|------|
+| `onStartup` | 应用启动时激活（用于模板函数注册等后台任务） | `"onStartup"` |
 | `onSearchPrefix:<prefix>` | 搜索前缀，查询以此开头时触发 | `"onSearchPrefix:gh "` |
 | `onCommand:<id>` | 命令触发，通过模糊匹配浮出 | `"onCommand:encode.url"` |
 
@@ -301,9 +302,12 @@ for plugin in plugins {
 
 ## 示例插件
 
-### Base64 编码器（`plugins-example/com.example.encode`）
+官方和社区插件详见 [插件市场](./plugin-marketplace.md)。
+
+**快速示例（Base64 编码器）：**
 
 ```json
+// plugin.json
 {
   "id": "com.example.encode",
   "name": "Base64 Encoder",
@@ -337,63 +341,7 @@ module.exports.provider = {
     }
   }
 };
-
-module.exports.onCommand = async (cmdId, args) => {
-  const text = args[0] || "";
-  const encoded = encodeURIComponent(text);
-  return [{
-    id: "url-result",
-    title: encoded,
-    action: { kind: "copy", arg: encoded }
-  }];
-};
 ```
-
-### Text Snippets（`plugins-official/com.kyvro.textsnippets`）
-
-官方插件，为 Text Snippets 提供日期/时间和 UUID 函数：
-
-```json
-{
-  "id": "com.kyvro.textsnippets",
-  "name": "Text Snippets",
-  "main": "index.js",
-  "activationEvents": ["onStartup"]
-}
-```
-
-```javascript
-// index.js
-module.exports.activate = (ctx) => {
-  // 注册日期函数
-  ctx.template.registerFunc("date", (args) => {
-    const format = args[0] || "YYYY-MM-DD";
-    const now = new Date();
-    // 格式化日期...
-    return formattedDate;
-  });
-
-  // 注册其他函数
-  ctx.template.registerFunc("uuid", (args) => {
-    return crypto.randomUUID();
-  });
-};
-```
-
-**Text Snippet 示例：**
-```json
-{
-  "trigger": "dd",
-  "replacement": "${date(\"YYMMDD\")}"
-}
-```
-输入 `dd` → 扩展为 `260825`（当前日期）
-
-### GitHub 搜索（`plugins-official/com.kyvro.github`）
-
-- 前缀：`gh <query>` 打开 GitHub 仓库搜索
-- 直接访问：`gh owner/repo` 直接打开仓库
-- 无需权限，使用宿主 `open-url`
 
 ## 测试
 
@@ -422,7 +370,7 @@ module.exports.activate = (ctx) => {
 
 - 仅支持 CommonJS（不支持 ESM）
 - 不支持 TypeScript（需手动编译）
-- 无插件市场（需手动安装）
+- 插件需手动安装（见 [插件市场](./plugin-marketplace.md)）
 - 无版本升级/回滚机制
 
 ### 未来计划（M2+）

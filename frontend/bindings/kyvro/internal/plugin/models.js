@@ -7,6 +7,44 @@
 import { Create as $Create } from "@wailsio/runtime";
 
 /**
+ * Author is the manifest author block.
+ */
+export class Author {
+    /**
+     * Creates a new Author instance.
+     * @param {Partial<Author>} [$$source = {}] - The source object to create the Author.
+     */
+    constructor($$source = {}) {
+        if (!("name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["url"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Author instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {Author}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new Author(/** @type {Partial<Author>} */($$parsedSource));
+    }
+}
+
+/**
  * PluginInfo describes a plugin for the settings UI, combining local and remote metadata.
  */
 export class PluginInfo {
@@ -53,9 +91,9 @@ export class PluginInfo {
         if (!("Author" in $$source)) {
             /**
              * @member
-             * @type {string}
+             * @type {Author}
              */
-            this["Author"] = "";
+            this["Author"] = (new Author());
         }
         if (!("IconPath" in $$source)) {
             /**
@@ -104,6 +142,22 @@ export class PluginInfo {
              */
             this["DownloadURL"] = "";
         }
+        if (!("Category" in $$source)) {
+            /**
+             * Plugin category for marketplace
+             * @member
+             * @type {string}
+             */
+            this["Category"] = "";
+        }
+        if (!("Keywords" in $$source)) {
+            /**
+             * Search keywords
+             * @member
+             * @type {string[]}
+             */
+            this["Keywords"] = [];
+        }
 
         Object.assign(this, $$source);
     }
@@ -115,11 +169,57 @@ export class PluginInfo {
      */
     static createFrom($$source = {}) {
         const $$createField4_0 = $$createType0;
+        const $$createField5_0 = $$createType1;
+        const $$createField13_0 = $$createType0;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("Permissions" in $$parsedSource) {
             $$parsedSource["Permissions"] = $$createField4_0($$parsedSource["Permissions"]);
         }
+        if ("Author" in $$parsedSource) {
+            $$parsedSource["Author"] = $$createField5_0($$parsedSource["Author"]);
+        }
+        if ("Keywords" in $$parsedSource) {
+            $$parsedSource["Keywords"] = $$createField13_0($$parsedSource["Keywords"]);
+        }
         return new PluginInfo(/** @type {Partial<PluginInfo>} */($$parsedSource));
+    }
+}
+
+/**
+ * PluginStats represents plugin statistics.
+ */
+export class PluginStats {
+    /**
+     * Creates a new PluginStats instance.
+     * @param {Partial<PluginStats>} [$$source = {}] - The source object to create the PluginStats.
+     */
+    constructor($$source = {}) {
+        if (!("downloads" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["downloads"] = 0;
+        }
+        if (!("rating" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["rating"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new PluginStats instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {PluginStats}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new PluginStats(/** @type {Partial<PluginStats>} */($$parsedSource));
     }
 }
 
@@ -190,32 +290,72 @@ export class RemotePlugin {
         if (!("author" in $$source)) {
             /**
              * @member
-             * @type {string}
+             * @type {Author}
              */
-            this["author"] = "";
+            this["author"] = (new Author());
         }
         if (!("download_url" in $$source)) {
             /**
-             * URL to download plugin archive
              * @member
              * @type {string}
              */
             this["download_url"] = "";
         }
-        if (!("icon_url" in $$source)) {
+        if (/** @type {any} */(false)) {
             /**
-             * URL to plugin icon
+             * @member
+             * @type {string | undefined}
+             */
+            this["icon_url"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {Date | undefined}
+             */
+            this["updated_at"] = undefined;
+        }
+        if (!("minHostVersion" in $$source)) {
+            /**
              * @member
              * @type {string}
              */
-            this["icon_url"] = "";
+            this["minHostVersion"] = "";
         }
-        if (!("updated_at" in $$source)) {
+        if (!("permissions" in $$source)) {
             /**
              * @member
-             * @type {Date}
+             * @type {string[]}
              */
-            this["updated_at"] = new Date("0001-01-01T00:00:00.000Z");
+            this["permissions"] = [];
+        }
+        if (!("platforms" in $$source)) {
+            /**
+             * @member
+             * @type {string[]}
+             */
+            this["platforms"] = [];
+        }
+        if (!("category" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["category"] = "";
+        }
+        if (!("keywords" in $$source)) {
+            /**
+             * @member
+             * @type {string[]}
+             */
+            this["keywords"] = [];
+        }
+        if (!("stats" in $$source)) {
+            /**
+             * @member
+             * @type {PluginStats}
+             */
+            this["stats"] = (new PluginStats());
         }
 
         Object.assign(this, $$source);
@@ -227,10 +367,30 @@ export class RemotePlugin {
      * @returns {RemotePlugin}
      */
     static createFrom($$source = {}) {
+        const $$createField4_0 = $$createType1;
         const $$createField7_0 = $Create.DateFromTime;
+        const $$createField9_0 = $$createType0;
+        const $$createField10_0 = $$createType0;
+        const $$createField12_0 = $$createType0;
+        const $$createField13_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("author" in $$parsedSource) {
+            $$parsedSource["author"] = $$createField4_0($$parsedSource["author"]);
+        }
         if ("updated_at" in $$parsedSource) {
             $$parsedSource["updated_at"] = $$createField7_0($$parsedSource["updated_at"]);
+        }
+        if ("permissions" in $$parsedSource) {
+            $$parsedSource["permissions"] = $$createField9_0($$parsedSource["permissions"]);
+        }
+        if ("platforms" in $$parsedSource) {
+            $$parsedSource["platforms"] = $$createField10_0($$parsedSource["platforms"]);
+        }
+        if ("keywords" in $$parsedSource) {
+            $$parsedSource["keywords"] = $$createField12_0($$parsedSource["keywords"]);
+        }
+        if ("stats" in $$parsedSource) {
+            $$parsedSource["stats"] = $$createField13_0($$parsedSource["stats"]);
         }
         return new RemotePlugin(/** @type {Partial<RemotePlugin>} */($$parsedSource));
     }
@@ -238,3 +398,5 @@ export class RemotePlugin {
 
 // Private type creation functions
 const $$createType0 = $Create.Array($Create.Any);
+const $$createType1 = Author.createFrom;
+const $$createType2 = PluginStats.createFrom;

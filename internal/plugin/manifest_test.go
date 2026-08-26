@@ -52,7 +52,7 @@ func TestParseManifestErrors(t *testing.T) {
 			m["activationEvents"] = []string{"onSearchPrefix:"}
 		}, ErrInvalidArgument},
 		{"unknown activation event", func(m map[string]any) {
-			m["activationEvents"] = []string{"onStartup"}
+			m["activationEvents"] = []string{"onInvalidEvent"}
 		}, ErrInvalidArgument},
 		{"duplicate command id", func(m map[string]any) {
 			m["commands"] = []map[string]any{{"id": "a"}, {"id": "a"}}

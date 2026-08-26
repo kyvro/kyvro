@@ -133,6 +133,9 @@ func parseActivationEvents(m *Manifest, commandIDs map[string]bool) ([]string, e
 	var prefixes []string
 	for i, ev := range m.ActivationEvents {
 		switch {
+		case ev == "onStartup":
+			// Plugin wants to be activated on startup (for template functions, etc.)
+			// No validation needed, just allow it
 		case strings.HasPrefix(ev, "onCommand:"):
 			id := strings.TrimPrefix(ev, "onCommand:")
 			if !commandIDs[id] {

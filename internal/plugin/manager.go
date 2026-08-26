@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -57,13 +58,15 @@ type PluginInfo struct {
 	Version      string
 	Description  string
 	Permissions  []string
-	Author       string
+	Author       Author
 	IconPath     string // absolute manifest-icon path ("" when none)
 	IconURL      string // remote icon URL for registry plugins
 	Disabled     bool   // user- or auto-disabled
 	AutoDisabled bool   // disabled by the 3-strike timeout rule
 	Status       PluginStatus
 	DownloadURL  string // URL for downloading from registry
+	Category     string // Plugin category for marketplace
+	Keywords     []string // Search keywords
 }
 
 // stateNamespace is the bbolt namespace persisting user choices ("disabled"
@@ -88,6 +91,7 @@ func NewManager(root string, store *core.Store, grant GrantDecision) *Manager {
 // Failures are logged and skipped — one broken plugin never blocks the rest
 // or the host.
 func (m *Manager) LoadAll() {
+	fmt.Printf("DEBUG: LoadAll called, plugins root: %s\n", m.root)
 	entries, err := os.ReadDir(m.root)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -95,11 +99,15 @@ func (m *Manager) LoadAll() {
 		}
 		return
 	}
+	fmt.Printf("DEBUG: Found %d entries in plugins root\n", len(entries))
 	for _, e := range entries {
+		fmt.Printf("DEBUG: Processing entry: %s\n", e.Name())
 		if !e.IsDir() {
+			fmt.Printf("DEBUG: Skipping %s (not a directory)\n", e.Name())
 			continue
 		}
 		if lp, err := m.load(filepath.Join(m.root, e.Name())); err != nil {
+			fmt.Printf("DEBUG: Failed to load plugin %s: %v\n", e.Name(), err)
 			log.Printf("plugin: skip %s: %v", e.Name(), err)
 		} else {
 			// Honor a persisted user disable: the runtime stays loaded (so
@@ -113,21 +121,28 @@ func (m *Manager) LoadAll() {
 			m.plugins[lp.manifest.ID] = lp
 			m.mu.Unlock()
 			log.Printf("plugin: loaded %s %s", lp.manifest.ID, lp.manifest.Version)
+			fmt.Printf("DEBUG: Successfully loaded plugin: %s %s\n", lp.manifest.ID, lp.manifest.Version)
 		}
 	}
+	fmt.Printf("DEBUG: LoadAll completed, loaded %d plugins\n", len(m.plugins))
 }
 
 // load resolves the version directory, validates the manifest and starts
 // the runtime for one plugin install dir.
 func (m *Manager) load(pluginDir string) (*loadedPlugin, error) {
+	fmt.Printf("DEBUG: Loading plugin from directory: %s\n", pluginDir)
 	dir, err := ResolveVersionDir(pluginDir)
 	if err != nil {
+		fmt.Printf("DEBUG: Failed to resolve version dir for %s: %v\n", pluginDir, err)
 		return nil, err
 	}
+	fmt.Printf("DEBUG: Resolved version directory: %s\n", dir)
 	manifest, err := LoadManifestFile(dir)
 	if err != nil {
+		fmt.Printf("DEBUG: Failed to load manifest from %s: %v\n", dir, err)
 		return nil, err
 	}
+	fmt.Printf("DEBUG: Loaded manifest for plugin: %s\n", manifest.ID)
 	perms := ParsePermissions(manifest.ID, manifest.Permissions, m.grant)
 	var storage *PluginStorage
 	if m.store != nil && perms.Granted("storage") {
@@ -176,9 +191,9 @@ func (m *Manager) ListPlugins() []PluginInfo {
 	defer m.mu.RUnlock()
 	out := make([]PluginInfo, 0, len(m.plugins))
 	for _, lp := range m.plugins {
-		authorName := ""
+		author := Author{}
 		if lp.manifest.Author != nil {
-			authorName = lp.manifest.Author.Name
+			author = *lp.manifest.Author
 		}
 		info := PluginInfo{
 			ID:           lp.manifest.ID,
@@ -186,7 +201,7 @@ func (m *Manager) ListPlugins() []PluginInfo {
 			Version:      lp.manifest.Version,
 			Description:  lp.manifest.Description,
 			Permissions:  lp.manifest.Permissions,
-			Author:       authorName,
+			Author:       author,
 			IconPath:     lp.rt.iconPath,
 			Disabled:     lp.disabled,
 			AutoDisabled: lp.disabled && lp.rt.Strikes() >= disableStrikes,

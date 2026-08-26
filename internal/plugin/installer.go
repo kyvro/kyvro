@@ -29,8 +29,8 @@ func NewInstaller(pluginsRoot string) *Installer {
 	}
 }
 
-// InstallFromGitHub installs a plugin directly from the GitHub plugins-official repository.
-// It downloads the plugin files and installs them to the plugins directory.
+// InstallFromGitHub installs a plugin directly from the GitHub plugins repository.
+// It downloads the plugin zip archive and installs it to the plugins directory.
 func (in *Installer) InstallFromGitHub(id string) error {
 	// Fetch plugin metadata from registry
 	plugin, err := in.registry.FetchPlugin(id)
@@ -38,63 +38,15 @@ func (in *Installer) InstallFromGitHub(id string) error {
 		return fmt.Errorf("fetch plugin metadata: %w", err)
 	}
 
-	// Extract plugin directory name from download URL
-	// Format: https://raw.githubusercontent.com/kyvro/kyvro/main/plugins-official/com.kyvro.github
-	parts := strings.Split(plugin.DownloadURL, "/")
-	pluginDirName := parts[len(parts)-1]
-
-	// Create target directory
-	targetDir := filepath.Join(in.pluginsRoot, pluginDirName, plugin.Version)
-	if err := os.MkdirAll(targetDir, 0o755); err != nil {
-		return fmt.Errorf("create plugin directory: %w", err)
-	}
-
-	// Fetch the plugin manifest first to know which files to download
-	manifestURL := fmt.Sprintf("%s/plugin.json", plugin.DownloadURL)
-	manifestData, err := in.downloadFile(manifestURL)
+	// Download plugin zip archive
+	zipData, err := in.downloadFile(plugin.DownloadURL)
 	if err != nil {
-		// Clean up partial installation
-		os.RemoveAll(filepath.Join(in.pluginsRoot, pluginDirName))
-		return fmt.Errorf("download manifest: %w", err)
+		return fmt.Errorf("download plugin archive: %w", err)
 	}
 
-	var manifest Manifest
-	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		// Clean up partial installation
-		os.RemoveAll(filepath.Join(in.pluginsRoot, pluginDirName))
-		return fmt.Errorf("parse manifest: %w", err)
-	}
-
-	// Download each required file
-	requiredFiles := []string{"plugin.json", manifest.Main}
-	if manifest.Icon != "" {
-		requiredFiles = append(requiredFiles, manifest.Icon)
-	}
-
-	for _, filename := range requiredFiles {
-		fileURL := fmt.Sprintf("%s/%s", plugin.DownloadURL, filename)
-		targetPath := filepath.Join(targetDir, filename)
-
-		data, err := in.downloadFile(fileURL)
-		if err != nil {
-			// Clean up partial installation
-			os.RemoveAll(filepath.Join(in.pluginsRoot, pluginDirName))
-			return fmt.Errorf("download %s: %w", filename, err)
-		}
-
-		if err := os.WriteFile(targetPath, data, 0o644); err != nil {
-			// Clean up partial installation
-			os.RemoveAll(filepath.Join(in.pluginsRoot, pluginDirName))
-			return fmt.Errorf("write %s: %w", filename, err)
-		}
-	}
-
-	// Create current.json to pin this version
-	currentPath := filepath.Join(in.pluginsRoot, pluginDirName, "current.json")
-	currentData := map[string]string{"version": plugin.Version}
-	currentJSON, _ := json.Marshal(currentData)
-	if err := os.WriteFile(currentPath, currentJSON, 0o644); err != nil {
-		// Non-fatal: plugin will work without current.json
+	// Install from the downloaded zip data
+	if err := in.InstallFromBytes(zipData); err != nil {
+		return fmt.Errorf("install from archive: %w", err)
 	}
 
 	return nil

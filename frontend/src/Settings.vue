@@ -20,7 +20,7 @@ import {
   SnippetAccessibilityGranted,
   RequestSnippetAccessibility,
 } from "../bindings/kyvro/service/searchservice";
-import type { PluginInfo } from "../bindings/kyvro/internal/plugin/models";
+import type { PluginInfo, Author } from "../bindings/kyvro/internal/plugin/models";
 import { PluginStatus } from "../bindings/kyvro/internal/plugin/models";
 import type { Snippet as SnippetModel } from "../bindings/kyvro/internal/core/models";
 import BrandMark from "./BrandMark.vue";
@@ -116,12 +116,41 @@ async function loadMarketPlugins() {
   error.value = "";
   try {
     const available = await AvailablePlugins();
+    console.log("DEBUG: AvailablePlugins result:", available);
+    console.log("DEBUG: AvailablePlugins count:", available?.length);
+
     const installedIds = new Set(installedPlugins.value.map(p => p.ID));
-    marketPlugins.value = (available ?? [])
-      .filter(p => !installedIds.has(p.ID))
-      .map(p => ({...p, Status: PluginStatus.StatusNotInstalled} as PluginInfo));
+    console.log("DEBUG: Installed IDs:", installedIds);
+
+    // Convert RemotePlugin (camelCase) to PluginInfo (PascalCase)
+    const filtered = (available ?? [])
+      .filter(p => !installedIds.has(p.id)) // RemotePlugin uses 'id' not 'ID'
+      .map(p => ({
+        ID: p.id,
+        Name: p.name,
+        Version: p.version,
+        Description: p.description,
+        Author: p.author,
+        IconPath: "",
+        IconURL: p.icon_url || "",
+        Disabled: false,
+        AutoDisabled: false,
+        Status: PluginStatus.StatusNotInstalled,
+        DownloadURL: p.download_url,
+        Category: p.category || "",
+        Keywords: p.keywords || [],
+        Permissions: p.permissions || [],
+        Platforms: p.platforms || [],
+        MinHostVersion: p.minHostVersion || ""
+      } as PluginInfo));
+
+    console.log("DEBUG: Filtered market plugins:", filtered);
+    console.log("DEBUG: Filtered count:", filtered.length);
+
+    marketPlugins.value = filtered;
     marketLoaded.value = true;
   } catch (e) {
+    console.error("DEBUG: Error loading market plugins:", e);
     error.value = String(e);
   }
 }
@@ -421,6 +450,9 @@ async function runSnippetAction(snippet: SnippetModel, action: "enable" | "disab
               </div>
               <div class="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] leading-none text-white/40">
                 <span class="truncate">{{ p.ID }}</span>
+                <span v-if="p.Description" class="truncate">{{ p.Description }}</span>
+                <span v-if="p.Author?.name" class="truncate">by {{ p.Author.name }}</span>
+                <span v-if="p.Category" class="rounded bg-white/10 px-1.5 py-0.5 text-white/55">{{ p.Category }}</span>
                 <span v-if="p.AutoDisabled" class="rounded bg-amber-400/15 px-1.5 py-0.5 text-amber-300/80">disabled after repeated timeouts</span>
                 <span v-for="perm in p.Permissions" :key="perm" class="rounded bg-white/10 px-1.5 py-0.5 text-white/55">{{ perm }}</span>
               </div>
@@ -456,7 +488,10 @@ async function runSnippetAction(snippet: SnippetModel, action: "enable" | "disab
               </div>
               <div class="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] leading-none text-white/40">
                 <span class="truncate">{{ p.ID }}</span>
-                <span class="truncate">{{ p.Description }}</span>
+                <span v-if="p.Description" class="truncate">{{ p.Description }}</span>
+                <span v-if="p.Author?.name" class="truncate">by {{ p.Author.name }}</span>
+                <span v-if="p.Category" class="rounded bg-white/10 px-1.5 py-0.5 text-white/55">{{ p.Category }}</span>
+                <span v-for="keyword in p.Keywords?.slice(0, 3)" :key="keyword" class="rounded bg-white/10 px-1.5 py-0.5 text-white/55">{{ keyword }}</span>
               </div>
             </div>
 
