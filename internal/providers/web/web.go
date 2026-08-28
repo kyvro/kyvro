@@ -29,9 +29,10 @@ func (p *Provider) Search(_ context.Context, query string) []core.SearchResult {
 	}
 	return []core.SearchResult{{
 		ID:       "web:" + query,
+		Kind:     core.KindURL,
 		Title:    fmt.Sprintf("Search Google for %q", query),
 		Subtitle: "open in default browser",
-		Action: core.Action{
+		PrimaryAction: core.Action{
 			Kind: core.ActionOpenURL,
 			Arg:  "https://www.google.com/search?q=" + url.QueryEscape(query),
 		},

@@ -67,6 +67,10 @@ func (e *Engine) usage(id string) Usage {
 // at most limit results. With an empty query it surfaces the provider
 // defaults ordered purely by frecency (the apps provider returns its full
 // list with score 0 in that case).
+//
+// Results are deduplicated by ID across (and within) providers: the first
+// occurrence wins, so provider order stays the priority order. No
+// cross-provider score merging happens — later providers remain fallbacks.
 func (e *Engine) Search(ctx context.Context, query string) []SearchResult {
 	if err := e.refresh(); err != nil {
 		// Ranking degrades to fuzzy-only; the caller decides whether to log.
@@ -74,6 +78,7 @@ func (e *Engine) Search(ctx context.Context, query string) []SearchResult {
 	}
 	now := e.now()
 
+	seen := make(map[string]struct{})
 	var out []SearchResult
 	remaining := e.limit
 	for _, p := range e.providers {
@@ -89,11 +94,30 @@ func (e *Engine) Search(ctx context.Context, query string) []SearchResult {
 			results[i].Score += Frecency(u.Count, u.LastUsed, now)
 		}
 		sortResults(results)
-		if len(results) > remaining {
-			results = results[:remaining]
+		// Fold provider-internal duplicates first (best-scored copy — the
+		// list is already sorted), then drop IDs earlier providers showed.
+		localSeen := make(map[string]struct{}, len(results))
+		deduped := make([]SearchResult, 0, len(results))
+		for _, r := range results {
+			if _, dup := seen[r.ID]; dup {
+				continue
+			}
+			if _, dup := localSeen[r.ID]; dup {
+				continue
+			}
+			localSeen[r.ID] = struct{}{}
+			deduped = append(deduped, r)
 		}
-		out = append(out, results...)
-		remaining -= len(results)
+		if len(deduped) > remaining {
+			deduped = deduped[:remaining]
+		}
+		// Only results actually emitted claim their ID; truncated rows stay
+		// available to later providers.
+		for _, r := range deduped {
+			seen[r.ID] = struct{}{}
+		}
+		out = append(out, deduped...)
+		remaining -= len(deduped)
 	}
 	return out
 }

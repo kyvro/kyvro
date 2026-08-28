@@ -6,12 +6,18 @@ package darwin
 
 import (
 	"bytes"
+	"crypto/sha1"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"howett.net/plist"
 
@@ -29,6 +35,17 @@ type AppSource struct {
 	apps []core.AppEntry
 
 	roots []string
+
+	// iconCacheDir stores PNGs for bundles whose .icns the pure-Go decoder
+	// cannot read (JPEG2000 payloads) or whose icon lives only in a compiled
+	// asset catalog (no .icns to point at); empty disables both fallbacks.
+	iconCacheDir string
+	// renderIcon is injectable so the cache logic is unit-testable without
+	// touching AppKit; production uses renderAppIconPNG.
+	renderIcon func(appPath string, size int) ([]byte, error)
+	// convertIcon rasterises an on-disk image file via AppKit at a shared
+	// cache size (DecodeImageFilePNG); injectable for the same reason.
+	convertIcon func(path string, size int) ([]byte, error)
 }
 
 // DefaultRoots returns the application directories scanned by default.
@@ -45,7 +62,20 @@ func DefaultRoots() []string {
 
 // NewAppSource creates a source scanning the default roots.
 func NewAppSource() *AppSource {
-	return &AppSource{roots: DefaultRoots()}
+	return &AppSource{
+		roots:       DefaultRoots(),
+		renderIcon:  renderAppIconPNG,
+		convertIcon: DecodeImageFilePNG,
+	}
+}
+
+// NewAppSourceWithIconCache creates a default-root source that additionally
+// renders icons for asset-catalog-only bundles into cacheDir (see the
+// AppSource field docs).
+func NewAppSourceWithIconCache(cacheDir string) *AppSource {
+	s := NewAppSource()
+	s.iconCacheDir = cacheDir
+	return s
 }
 
 // NewAppSourceWithRoots creates a source scanning custom roots (tests).
@@ -68,7 +98,7 @@ func (s *AppSource) Rescan() error {
 	var apps []core.AppEntry
 	seen := make(map[string]struct{})
 	for _, root := range s.roots {
-		entries, err := scanRoot(root, langs)
+		entries, err := s.scanRoot(root, langs)
 		if err != nil {
 			// Unreadable roots (e.g. missing ~/Applications) are skipped.
 			continue
@@ -93,7 +123,7 @@ func (s *AppSource) Rescan() error {
 }
 
 // scanRoot walks root up to maxDepth collecting .app bundles.
-func scanRoot(root string, langs []string) ([]core.AppEntry, error) {
+func (s *AppSource) scanRoot(root string, langs []string) ([]core.AppEntry, error) {
 	info, err := os.Stat(root)
 	if err != nil || !info.IsDir() {
 		return nil, fmt.Errorf("root %q unavailable: %w", root, err)
@@ -112,7 +142,7 @@ func scanRoot(root string, langs []string) ([]core.AppEntry, error) {
 		}
 		depth := strings.Count(rel, string(filepath.Separator))
 		if strings.HasSuffix(path, ".app") {
-			if entry, perr := readAppBundle(path, langs); perr == nil {
+			if entry, perr := s.readAppBundle(path, langs); perr == nil {
 				apps = append(apps, entry)
 			}
 			return filepath.SkipDir // never descend into a bundle
@@ -140,7 +170,7 @@ type infoPlist struct {
 // readAppBundle parses <bundle>/Contents/Info.plist into an AppEntry.
 // langs is the preferred localization order used to resolve display
 // names from <bundle>/Contents/Resources/<lang>.lproj/InfoPlist.strings.
-func readAppBundle(bundlePath string, langs []string) (core.AppEntry, error) {
+func (s *AppSource) readAppBundle(bundlePath string, langs []string) (core.AppEntry, error) {
 	f, err := os.Open(filepath.Join(bundlePath, "Contents", "Info.plist"))
 	if err != nil {
 		return core.AppEntry{}, err
@@ -170,14 +200,141 @@ func readAppBundle(bundlePath string, langs []string) (core.AppEntry, error) {
 		name = fileBase
 	}
 
+	iconPath := resolveIconPath(bundlePath, info.CFBundleIconFile)
+	switch {
+	case iconPath != "" && s.iconCacheDir != "":
+		// A resolvable .icns might still be undecodable by the pure-Go
+		// decoder (JPEG2000 payloads); scan-time conversion keeps the
+		// runtime serve path free of AppKit.
+		iconPath = s.cachedOrConvertedIcon(bundlePath, info.CFBundleIdentifier, iconPath)
+	case iconPath == "" && s.iconCacheDir != "":
+		iconPath = s.renderedIconFallback(bundlePath, info.CFBundleIdentifier)
+	}
+
 	return core.AppEntry{
 		ID:       info.CFBundleIdentifier,
 		Name:     name,
 		Path:     bundlePath,
 		BundleID: info.CFBundleIdentifier,
-		IconPath: resolveIconPath(bundlePath, info.CFBundleIconFile),
+		IconPath: iconPath,
 		AltNames: altNames(name, rawName, fileBase),
 	}, nil
+}
+
+// iconCacheKey derives the cache file stem for a bundle: the sanitised
+// bundle ID, or a short hash of the bundle path when the ID is missing.
+func iconCacheKey(bundlePath, bundleID string) string {
+	key := strings.Map(func(r rune) rune {
+		switch r {
+		case '/', '\\', ':':
+			return '_'
+		}
+		return r
+	}, bundleID)
+	if key == "" {
+		sum := sha1.Sum([]byte(bundlePath))
+		key = hex.EncodeToString(sum[:6])
+	}
+	return key
+}
+
+// writePNGAtomic stores png at dst via tmp+rename so a crashed scan never
+// leaves a truncated image behind.
+func writePNGAtomic(dst string, png []byte) error {
+	tmp := dst + ".tmp"
+	if err := os.WriteFile(tmp, png, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dst)
+}
+
+// cachedOrConvertedIcon guards a resolvable .icns against decode failures:
+// a cheap structural sniff decides whether the pure-Go icns decoder will
+// read the file; JPEG2000-only or otherwise unreadable icons are converted
+// once via AppKit and served as <iconCacheDir>/<bundleID>.png instead.
+// Converted files refresh whenever the bundle metadata or the .icns itself
+// is newer than the cache. Any failure degrades to the original path — the
+// runtime serve path still has its own AppKit fallback.
+func (s *AppSource) cachedOrConvertedIcon(bundlePath, bundleID, icnsPath string) string {
+	if s.convertIcon == nil || s.iconCacheDir == "" {
+		return icnsPath
+	}
+	dst := filepath.Join(s.iconCacheDir, iconCacheKey(bundlePath, bundleID)+".png")
+
+	newest := newestIconSourceMtime(bundlePath)
+	if st, err := os.Stat(icnsPath); err == nil && st.ModTime().After(newest) {
+		newest = st.ModTime()
+	}
+	if st, err := os.Stat(dst); err == nil && !st.IsDir() && !st.ModTime().Before(newest) {
+		return dst // converted copy still up to date
+	}
+	if icnsHasPNGElement(icnsPath) {
+		return icnsPath // decodable by the pure-Go serve path as-is
+	}
+	png, err := s.convertIcon(icnsPath, renderedIconSize)
+	if err != nil {
+		log.Printf("appicon: convert %s: %v", filepath.Base(icnsPath), err)
+		return icnsPath
+	}
+	if err := os.MkdirAll(s.iconCacheDir, 0o755); err != nil {
+		log.Printf("appicon: mkdir %s: %v", s.iconCacheDir, err)
+		return icnsPath
+	}
+	if err := writePNGAtomic(dst, png); err != nil {
+		log.Printf("appicon: write %s: %v", dst, err)
+		return icnsPath
+	}
+	return dst
+}
+
+// renderedIconFallback keeps an NSWorkspace-rendered PNG under iconCacheDir
+// for bundles whose icon lives only in a compiled asset catalog; the file is
+// regenerated whenever the bundle's metadata (Info.plist / Assets.car) is
+// newer than the cached PNG. Empty return on any failure lets the UI fall
+// back to its monogram.
+func (s *AppSource) renderedIconFallback(bundlePath, bundleID string) string {
+	if s.renderIcon == nil || s.iconCacheDir == "" {
+		return ""
+	}
+
+	dst := filepath.Join(s.iconCacheDir, iconCacheKey(bundlePath, bundleID)+".png")
+
+	newest := newestIconSourceMtime(bundlePath)
+	if st, err := os.Stat(dst); err == nil && !st.IsDir() && !st.ModTime().Before(newest) {
+		return dst // cached render still up to date
+	}
+
+	png, err := s.renderIcon(bundlePath, renderedIconSize)
+	if err != nil {
+		log.Printf("appicon: render %s: %v", filepath.Base(bundlePath), err)
+		return ""
+	}
+	if err := os.MkdirAll(s.iconCacheDir, 0o755); err != nil {
+		log.Printf("appicon: mkdir %s: %v", s.iconCacheDir, err)
+		return ""
+	}
+	if err := writePNGAtomic(dst, png); err != nil {
+		log.Printf("appicon: write %s: %v", dst, err)
+		return ""
+	}
+	return dst
+}
+
+// newestIconSourceMtime reports when a bundle's icon-bearing metadata last
+// changed — Info.plist always exists; Assets.car carries catalog icons.
+func newestIconSourceMtime(bundlePath string) time.Time {
+	mt := func(p string) time.Time {
+		if st, err := os.Stat(p); err == nil {
+			return st.ModTime()
+		}
+		return time.Time{}
+	}
+	t1 := mt(filepath.Join(bundlePath, "Contents", "Info.plist"))
+	t2 := mt(filepath.Join(bundlePath, "Contents", "Resources", "Assets.car"))
+	if t2.After(t1) {
+		return t2
+	}
+	return t1
 }
 
 // altNames collects the un-localized raw name and the bundle filename
@@ -205,7 +362,10 @@ func altNames(name, rawName, fileBase string) []string {
 
 // localizedDisplayName reads CFBundleDisplayName / CFBundleName from the
 // first InfoPlist.strings found in the preferred localizations, mirroring
-// how Finder shows localized app names (钉钉, 百度网盘, …).
+// how Finder shows localized app names (钉钉, 百度网盘, …). Bundles that
+// carry only a compiled InfoPlist.loctable instead of per-language .strings
+// files (modern system apps: System Settings, Calculator, … ship empty
+// .lproj dirs) resolve through that table as a fallback.
 func localizedDisplayName(bundlePath string, langs []string) string {
 	for _, lang := range langs {
 		p := filepath.Join(bundlePath, "Contents", "Resources", lang+".lproj", "InfoPlist.strings")
@@ -218,6 +378,38 @@ func localizedDisplayName(bundlePath string, langs []string) string {
 			CFBundleName        string `plist:"CFBundleName"`
 		}
 		if plist.NewDecoder(bytes.NewReader(data)).Decode(&loc) != nil {
+			continue
+		}
+		if loc.CFBundleDisplayName != "" {
+			return loc.CFBundleDisplayName
+		}
+		if loc.CFBundleName != "" {
+			return loc.CFBundleName
+		}
+	}
+	return localizedDisplayNameFromLoctable(bundlePath, langs)
+}
+
+// localizedDisplayNameFromLoctable resolves the display name through
+// Contents/Resources/InfoPlist.loctable — a plain binary plist keyed by
+// locale ("zh_CN", "en_AU", …), each mapping the usual Info.plist keys to
+// their translations.
+func localizedDisplayNameFromLoctable(bundlePath string, langs []string) string {
+	p := filepath.Join(bundlePath, "Contents", "Resources", "InfoPlist.loctable")
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return ""
+	}
+	var table map[string]struct {
+		CFBundleDisplayName string `plist:"CFBundleDisplayName"`
+		CFBundleName        string `plist:"CFBundleName"`
+	}
+	if plist.NewDecoder(bytes.NewReader(data)).Decode(&table) != nil {
+		return ""
+	}
+	for _, lang := range langs {
+		loc, ok := table[lang]
+		if !ok {
 			continue
 		}
 		if loc.CFBundleDisplayName != "" {
@@ -311,4 +503,48 @@ func resolveIconPath(bundlePath, iconFile string) string {
 		return p
 	}
 	return ""
+}
+
+// pngMagic is the signature of PNG-encoded icns renditions — the only
+// payload format the pure-Go serve-path decoder handles (JPEG2000
+// renditions are skipped there, legacy masks are image-data-less).
+var pngMagic = []byte{0x89, 'P', 'N', 'G'}
+
+// icnsHasPNGElement reports cheaply whether at least one rendition in the
+// .icns carries a PNG payload, i.e. whether jackmordaunt/icns will decode
+// the file. Only 8-byte headers are read sequentially with ReadAt — no
+// full-file parse; any structural oddity conservatively reports false so
+// the scan-time AppKit conversion kicks in.
+func icnsHasPNGElement(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	var hdr [8]byte
+	if _, err := io.ReadFull(f, hdr[:]); err != nil || string(hdr[:4]) != "icns" {
+		return false
+	}
+	total := binary.BigEndian.Uint32(hdr[4:8])
+	if total < 16 || total > 1<<30 { // implausible size: treat as unreadable
+		return false
+	}
+
+	magic := make([]byte, len(pngMagic))
+	for off := uint64(8); off+8 <= uint64(total); {
+		var el [8]byte
+		if _, err := f.ReadAt(el[:], int64(off)); err != nil {
+			return false
+		}
+		size := binary.BigEndian.Uint32(el[4:8])
+		if size < 8 {
+			return false
+		}
+		if _, err := f.ReadAt(magic, int64(off+8)); err == nil && bytes.Equal(magic, pngMagic) {
+			return true
+		}
+		off += uint64(size)
+	}
+	return false
 }

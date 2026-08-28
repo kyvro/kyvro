@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { Events, Window } from "@wailsio/runtime";
-import { Search, Launch, RunAction } from "../bindings/kyvro/service/searchservice";
-import { ActionKind, type SearchResult } from "../bindings/kyvro/internal/core/models";
+import { Search, Execute } from "../bindings/kyvro/service/searchservice";
+import type { SearchResult } from "../bindings/kyvro/internal/core/models";
 import Settings from "./Settings.vue";
 import { monogramStyle } from "./monogram";
 
@@ -69,29 +69,22 @@ function reset() {
   error.value = "";
 }
 
-async function activate(index: number) {
+// activate runs the row's primary action (or the ActionItem with the
+// given ID). Plugin actions may return a secondary result list, which
+// pushes a new view (window stays visible); an empty list ends the
+// interaction like any terminal action.
+async function activate(index: number, actionID = "") {
   const r = results.value[index];
   if (!r) return;
-  if (r.Action?.Kind === ActionKind.ActionPlugin) {
-    // Plugin row: run it; results push a secondary view (window stays
-    // visible), an empty list ends the interaction like a normal launch.
-    try {
-      const res = await RunAction(r.ID);
-      if (res && res.length > 0) {
-        seq++; // drop any in-flight search so it cannot overwrite the view
-        viewStack.value.push(results.value);
-        results.value = res;
-        selected.value = 0;
-        return;
-      }
-      await Window.Hide();
-    } catch (e) {
-      error.value = String(e);
-    }
-    return;
-  }
   try {
-    await Launch(r.ID);
+    const res = await Execute(r.ID, actionID);
+    if (res && res.length > 0) {
+      seq++; // drop any in-flight search so it cannot overwrite the view
+      viewStack.value.push(results.value);
+      results.value = res;
+      selected.value = 0;
+      return;
+    }
     await Window.Hide();
   } catch (e) {
     error.value = String(e);
@@ -105,6 +98,26 @@ function scrollSelectedIntoView() {
 }
 
 function onKeydown(e: KeyboardEvent) {
+  if (e.metaKey && e.key === "Enter") {
+    // Secondary action bound to cmd+enter (folder: Reveal in Finder);
+    // rows without one fall back to their primary action.
+    e.preventDefault();
+    const r = results.value[selected.value];
+    const item = r?.Actions?.find((a) => a.Shortcut === "cmd+enter");
+    void activate(selected.value, item ? item.ID : "");
+    return;
+  }
+  if (e.metaKey && (e.key === "c" || e.key === "C")) {
+    // Secondary action bound to cmd+c (folder: Copy Path); rows without
+    // one fall through to the browser's native copy.
+    const r = results.value[selected.value];
+    const item = r?.Actions?.find((a) => a.Shortcut === "cmd+c");
+    if (item) {
+      e.preventDefault();
+      void activate(selected.value, item.ID);
+    }
+    return;
+  }
   switch (e.key) {
     case "ArrowDown":
       if (selected.value < results.value.length - 1) selected.value++;
@@ -149,6 +162,10 @@ function onIconError(r: SearchResult) {
 
 function isCalcResult(r: SearchResult) {
   return r.ID.startsWith("calc:");
+}
+
+function isFolderResult(r: SearchResult) {
+  return r.Kind === "folder";
 }
 
 function isWebResult(r: SearchResult) {
@@ -226,9 +243,11 @@ onBeforeUnmount(() => {
         @mouseenter="selected = i"
         @click="activate(i)"
       >
-        <!-- Real app icon served by the Go side; monogram fallback -->
+        <!-- Real app icon served by the Go side; monogram fallback.
+             Plugin rows are excluded here — their manifest icons render
+             glyph-sized inside the shared chip below, matching folders. -->
         <img
-          v-if="hasIcon(r)"
+          v-if="hasIcon(r) && !isPluginResult(r)"
           :src="iconSrc(r)"
           alt=""
           loading="lazy"
@@ -253,12 +272,25 @@ onBeforeUnmount(() => {
             <path d="M8 7h8M8 12h.01M12 12h.01M16 12h.01M8 16h.01M12 16h.01M16 16h.01" />
           </svg>
         </div>
-        <!-- Plugin rows share the uniform puzzle glyph (per-plugin logos are M2) -->
+        <!-- Plugin rows: manifest icon rendered glyph-sized inside the
+             shared chip (same geometry as folder/calc/web), falling back
+             to the uniform puzzle glyph when absent or broken -->
         <div
           v-else-if="isPluginResult(r)"
           class="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-white/10 text-white/60"
         >
+          <img
+            v-if="hasIcon(r)"
+            :src="iconSrc(r)"
+            alt=""
+            loading="lazy"
+            decoding="async"
+            draggable="false"
+            class="h-4.5 w-4.5"
+            @error="onIconError(r)"
+          />
           <svg
+            v-else
             class="h-4.5 w-4.5"
             viewBox="0 0 24 24"
             fill="none"
@@ -269,6 +301,23 @@ onBeforeUnmount(() => {
           >
             <path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4" />
             <rect x="7" y="7" width="10" height="10" rx="2" />
+          </svg>
+        </div>
+        <!-- Folder rows get the folder glyph before the monogram fallback -->
+        <div
+          v-else-if="isFolderResult(r)"
+          class="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-white/10"
+        >
+          <svg
+            class="h-4.5 w-4.5 text-white/70"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
           </svg>
         </div>
         <div

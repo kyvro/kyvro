@@ -76,7 +76,65 @@ export class Action {
 }
 
 /**
+ * ActionItem is a secondary action offered on a result (e.g. "Reveal in
+ * Finder"). Shortcut is a first-version string like "cmd+enter".
+ */
+export class ActionItem {
+    /**
+     * Creates a new ActionItem instance.
+     * @param {Partial<ActionItem>} [$$source = {}] - The source object to create the ActionItem.
+     */
+    constructor($$source = {}) {
+        if (!("ID" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["ID"] = "";
+        }
+        if (!("Title" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["Title"] = "";
+        }
+        if (!("Shortcut" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["Shortcut"] = "";
+        }
+        if (!("Action" in $$source)) {
+            /**
+             * @member
+             * @type {Action}
+             */
+            this["Action"] = (new Action());
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ActionItem instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ActionItem}
+     */
+    static createFrom($$source = {}) {
+        const $$createField3_0 = $$createType1;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("Action" in $$parsedSource) {
+            $$parsedSource["Action"] = $$createField3_0($$parsedSource["Action"]);
+        }
+        return new ActionItem(/** @type {Partial<ActionItem>} */($$parsedSource));
+    }
+}
+
+/**
  * ActionKind describes what to do when a result is activated.
+ * Values are append-only: frecency and persisted state must stay stable.
  * @readonly
  * @enum {number}
  */
@@ -106,6 +164,190 @@ export const ActionKind = {
      * Executed via the plugin manager, never directly by the host.
      */
     ActionPlugin: 3,
+
+    /**
+     * ActionOpenPath opens a filesystem path with the system default
+     * handler (folders open in Finder).
+     */
+    ActionOpenPath: 4,
+
+    /**
+     * ActionRevealPath reveals a filesystem path in Finder.
+     */
+    ActionRevealPath: 5,
+};
+
+/**
+ * FolderSource is a user-configured root directory whose subdirectories are
+ * indexed for folder search (spec §7). Sources live in the folder-sources
+ * bbolt bucket keyed by ID.
+ */
+export class FolderSource {
+    /**
+     * Creates a new FolderSource instance.
+     * @param {Partial<FolderSource>} [$$source = {}] - The source object to create the FolderSource.
+     */
+    constructor($$source = {}) {
+        if (!("ID" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["ID"] = "";
+        }
+        if (!("Path" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["Path"] = "";
+        }
+        if (!("MaxDepth" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["MaxDepth"] = 0;
+        }
+        if (!("Enabled" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["Enabled"] = false;
+        }
+        if (!("CreatedAt" in $$source)) {
+            /**
+             * @member
+             * @type {Date}
+             */
+            this["CreatedAt"] = new Date("0001-01-01T00:00:00.000Z");
+        }
+        if (!("UpdatedAt" in $$source)) {
+            /**
+             * @member
+             * @type {Date}
+             */
+            this["UpdatedAt"] = new Date("0001-01-01T00:00:00.000Z");
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new FolderSource instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {FolderSource}
+     */
+    static createFrom($$source = {}) {
+        const $$createField4_0 = $Create.DateFromTime;
+        const $$createField5_0 = $Create.DateFromTime;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("CreatedAt" in $$parsedSource) {
+            $$parsedSource["CreatedAt"] = $$createField4_0($$parsedSource["CreatedAt"]);
+        }
+        if ("UpdatedAt" in $$parsedSource) {
+            $$parsedSource["UpdatedAt"] = $$createField5_0($$parsedSource["UpdatedAt"]);
+        }
+        return new FolderSource(/** @type {Partial<FolderSource>} */($$parsedSource));
+    }
+}
+
+/**
+ * FolderSourceInfo is the settings-UI view of a folder source plus its
+ * runtime scan status.
+ */
+export class FolderSourceInfo {
+    /**
+     * Creates a new FolderSourceInfo instance.
+     * @param {Partial<FolderSourceInfo>} [$$source = {}] - The source object to create the FolderSourceInfo.
+     */
+    constructor($$source = {}) {
+        if (!("Source" in $$source)) {
+            /**
+             * @member
+             * @type {FolderSource}
+             */
+            this["Source"] = (new FolderSource());
+        }
+        if (!("DisplayPath" in $$source)) {
+            /**
+             * DisplayPath is the ~-abbreviated display form of Source.Path (the
+             * absolute path stays in Source.Path for tooltip/lookup use).
+             * @member
+             * @type {string}
+             */
+            this["DisplayPath"] = "";
+        }
+        if (!("IndexedCount" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["IndexedCount"] = 0;
+        }
+        if (!("LastScannedAt" in $$source)) {
+            /**
+             * @member
+             * @type {Date}
+             */
+            this["LastScannedAt"] = new Date("0001-01-01T00:00:00.000Z");
+        }
+        if (!("LastScanError" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["LastScanError"] = "";
+        }
+        if (!("Scanning" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["Scanning"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new FolderSourceInfo instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {FolderSourceInfo}
+     */
+    static createFrom($$source = {}) {
+        const $$createField0_0 = $$createType2;
+        const $$createField3_0 = $Create.DateFromTime;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("Source" in $$parsedSource) {
+            $$parsedSource["Source"] = $$createField0_0($$parsedSource["Source"]);
+        }
+        if ("LastScannedAt" in $$parsedSource) {
+            $$parsedSource["LastScannedAt"] = $$createField3_0($$parsedSource["LastScannedAt"]);
+        }
+        return new FolderSourceInfo(/** @type {Partial<FolderSourceInfo>} */($$parsedSource));
+    }
+}
+
+/**
+ * ResultKind describes the type of a search result. The UI may use it for
+ * icons and presentation; execution behaviour is always driven by the
+ * attached Actions, never by the kind.
+ * @readonly
+ * @enum {string}
+ */
+export const ResultKind = {
+    /**
+     * The Go zero value for the underlying type of the enum.
+     */
+    $zero: "",
+
+    KindApp: "app",
+    KindFolder: "folder",
+    KindURL: "url",
+    KindCommand: "command",
+    KindText: "text",
 };
 
 /**
@@ -126,6 +368,14 @@ export class SearchResult {
              */
             this["ID"] = "";
         }
+        if (!("Kind" in $$source)) {
+            /**
+             * Kind describes the result type for presentation (icons, styling).
+             * @member
+             * @type {ResultKind}
+             */
+            this["Kind"] = ResultKind.$zero;
+        }
         if (!("Title" in $$source)) {
             /**
              * Title is the primary label.
@@ -142,13 +392,30 @@ export class SearchResult {
              */
             this["Subtitle"] = "";
         }
-        if (!("Action" in $$source)) {
+        if (!("PrimaryAction" in $$source)) {
             /**
-             * Action is executed when the user activates the result.
+             * PrimaryAction is executed when the user activates the result
+             * (Enter / click).
              * @member
              * @type {Action}
              */
-            this["Action"] = (new Action());
+            this["PrimaryAction"] = (new Action());
+        }
+        if (!("Actions" in $$source)) {
+            /**
+             * Actions lists secondary actions addressable by ID or Shortcut.
+             * @member
+             * @type {ActionItem[]}
+             */
+            this["Actions"] = [];
+        }
+        if (!("Data" in $$source)) {
+            /**
+             * Data carries structured metadata (e.g. {"path": absPath}).
+             * @member
+             * @type {{ [_ in string]?: any }}
+             */
+            this["Data"] = {};
         }
         if (!("Score" in $$source)) {
             /**
@@ -177,10 +444,18 @@ export class SearchResult {
      * @returns {SearchResult}
      */
     static createFrom($$source = {}) {
-        const $$createField3_0 = $$createType1;
+        const $$createField4_0 = $$createType1;
+        const $$createField5_0 = $$createType4;
+        const $$createField6_0 = $$createType5;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("Action" in $$parsedSource) {
-            $$parsedSource["Action"] = $$createField3_0($$parsedSource["Action"]);
+        if ("PrimaryAction" in $$parsedSource) {
+            $$parsedSource["PrimaryAction"] = $$createField4_0($$parsedSource["PrimaryAction"]);
+        }
+        if ("Actions" in $$parsedSource) {
+            $$parsedSource["Actions"] = $$createField5_0($$parsedSource["Actions"]);
+        }
+        if ("Data" in $$parsedSource) {
+            $$parsedSource["Data"] = $$createField6_0($$parsedSource["Data"]);
         }
         return new SearchResult(/** @type {Partial<SearchResult>} */($$parsedSource));
     }
@@ -249,3 +524,7 @@ export class Snippet {
 // Private type creation functions
 const $$createType0 = $Create.Array($Create.Any);
 const $$createType1 = Action.createFrom;
+const $$createType2 = FolderSource.createFrom;
+const $$createType3 = ActionItem.createFrom;
+const $$createType4 = $Create.Array($$createType3);
+const $$createType5 = $Create.Map($Create.Any, $Create.Any);

@@ -81,8 +81,11 @@ func TestSearchReturnsCopyableResult(t *testing.T) {
 	if r.ID != "calc:(1+2)*4" || r.Title != "= 12" {
 		t.Fatalf("bad result: %+v", r)
 	}
-	if r.Action.Kind != core.ActionCopyText || r.Action.Arg != "12" {
-		t.Fatalf("bad action: %+v", r.Action)
+	if r.PrimaryAction.Kind != core.ActionCopyText || r.PrimaryAction.Arg != "12" {
+		t.Fatalf("bad action: %+v", r.PrimaryAction)
+	}
+	if r.Kind != core.KindText {
+		t.Fatalf("kind = %q, want text", r.Kind)
 	}
 
 	// Non-expressions yield nothing.

@@ -4,7 +4,11 @@
 
 export {
     Action,
+    ActionItem,
     ActionKind,
+    FolderSource,
+    FolderSourceInfo,
+    ResultKind,
     SearchResult,
     Snippet
 } from "./models.js";

@@ -8,6 +8,7 @@ package main
 import (
 	"embed"
 	"log"
+	"path/filepath"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
@@ -44,7 +45,11 @@ func main() {
 
 	// The store/engine are opened inside the service's startup hook so the
 	// single-instance guard below runs before anything contends on bbolt.
-	searchService := service.New(dataPath, platform.NewAppSource(), platform.NewAppLauncher())
+	searchService := service.New(dataPath,
+		// Asset-catalog-only apps (System Settings, …) get NSWorkspace-rendered
+		// PNG icons cached under the app-icons dir at scan time.
+		platform.NewAppSourceWithIconCache(filepath.Join(filepath.Dir(dataPath), "cache", "app-icons")),
+		platform.NewAppLauncher())
 
 	app := application.New(application.Options{
 		Name:        "Kyvro",

@@ -29,6 +29,15 @@ type AppLauncher interface {
 	Launch(app core.AppEntry) error
 }
 
+// PathOpener opens and reveals filesystem paths with the system handler
+// (Finder on macOS).
+type PathOpener interface {
+	// OpenPath opens path with the default application.
+	OpenPath(path string) error
+	// RevealPath reveals path in the file manager (Finder).
+	RevealPath(path string) error
+}
+
 // TextExpander provides global text expansion functionality.
 type TextExpander interface {
 	// Start begins listening for keyboard events and expanding snippets.

@@ -33,8 +33,8 @@ func TestRuntimeSearchConvertsResults(t *testing.T) {
 	if r.Score != scoreHintMax {
 		t.Errorf("scoreHint 60 must clamp to %v, got %v", scoreHintMax, r.Score)
 	}
-	if r.Action.Kind != core.ActionCopyText || r.Action.Arg != "copied" {
-		t.Errorf("action = %+v", r.Action)
+	if r.PrimaryAction.Kind != core.ActionCopyText || r.PrimaryAction.Arg != "copied" {
+		t.Errorf("action = %+v", r.PrimaryAction)
 	}
 }
 
@@ -52,8 +52,8 @@ func TestRuntimeSearchDropsInvalidEntries(t *testing.T) {
 		t.Errorf("unexpected survivors: %s", ids)
 	}
 	for _, r := range results {
-		if r.Action.Kind == core.ActionPlugin && r.Action.PluginID == "" {
-			t.Errorf("callback action lost its plugin id: %+v", r.Action)
+		if r.PrimaryAction.Kind == core.ActionPlugin && r.PrimaryAction.PluginID == "" {
+			t.Errorf("callback action lost its plugin id: %+v", r.PrimaryAction)
 		}
 	}
 }
@@ -157,10 +157,10 @@ func TestRuntimeRunActionCallback(t *testing.T) {
 	}
 	// First action is the callback; it must round-trip through the plugin.
 	r := results[0]
-	if r.Action.Kind != core.ActionPlugin || r.Action.ActionID != "back" {
-		t.Fatalf("primary action = %+v", r.Action)
+	if r.PrimaryAction.Kind != core.ActionPlugin || r.PrimaryAction.ActionID != "back" {
+		t.Fatalf("primary action = %+v", r.PrimaryAction)
 	}
-	second, err := rt.RunAction(context.Background(), r.Action.ActionID, r.Action.Args, time.Second)
+	second, err := rt.RunAction(context.Background(), r.PrimaryAction.ActionID, r.PrimaryAction.Args, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,6 +16,8 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"kyvro/internal/core"
+	"kyvro/internal/folders"
+	"kyvro/internal/indexcache"
 	"kyvro/internal/platform"
 	kyvroplugin "kyvro/internal/plugin"
 	"kyvro/internal/providers/apps"
@@ -23,9 +25,30 @@ import (
 	"kyvro/internal/providers/web"
 )
 
+// clipboardWriter abstracts the Wails clipboard so Execute is unit-testable
+// without an application instance.
+type clipboardWriter interface {
+	WriteText(text string) error
+}
+
+// wailsClipboard writes through the Wails application clipboard.
+type wailsClipboard struct{}
+
+func (wailsClipboard) WriteText(text string) error {
+	app := application.Get()
+	if app == nil || app.Clipboard == nil {
+		return fmt.Errorf("clipboard unavailable")
+	}
+	if !app.Clipboard.SetText(text) {
+		return fmt.Errorf("copy to clipboard failed")
+	}
+	return nil
+}
+
 // SearchService is bound to the frontend by Wails. Search feeds the result
-// list; Launch activates a result from the most recent Search and records
-// usage (frecency); the plugin methods back the settings window.
+// list; Execute activates a result (or one of its secondary actions) from
+// the most recent Search and records usage (frecency); the plugin and
+// folder methods back the settings window.
 //
 // The engine, store and providers are constructed lazily in ServiceStartup:
 // the single-instance guard inside application.New must get the chance to
@@ -43,9 +66,19 @@ type SearchService struct {
 	installer *kyvroplugin.Installer
 	initErr   error
 
+	pathOpener platform.PathOpener
+	folderCtl  *folders.Controller
+	clipboard  clipboardWriter
+
 	mu   sync.Mutex
 	last map[string]core.SearchResult
 
+	// TODO(snippets): Text Snippets is temporarily disabled and will be
+	// re-opened later. Both fields are intentionally left nil (never assigned
+	// in ServiceStartup) so the global keyboard hook (CGEventTap) never starts
+	// and every snippet-related bound method below degrades gracefully via its
+	// nil guard. Core code in internal/core/snippets.go, template.go and
+	// internal/platform/darwin/expander.go is untouched for future use.
 	snippets     *core.SnippetsService
 	textExpander platform.TextExpander
 }
@@ -58,46 +91,100 @@ func New(dataPath string, source platform.AppSource, launcher platform.AppLaunch
 		pluginsDir: filepath.Join(filepath.Dir(dataPath), "plugins"),
 		source:     source,
 		launcher:   launcher,
+		clipboard:  wailsClipboard{},
 		last:       make(map[string]core.SearchResult),
 	}
 }
 
-// ServiceStartup opens the store, wires providers (calc, apps, plugins, web
-// — plugins strictly between apps and the web fallback) into the engine and
-// kicks off the background app scan.
-func (s *SearchService) ServiceStartup(_ context.Context, _ application.ServiceOptions) error {
+// ServiceStartup opens the store, wires providers (calc, apps, folders,
+// plugins, web — folders before plugins, web strictly last) into the
+// engine, seeds providers from the index caches and kicks off the
+// background app scan and folder refresh.
+func (s *SearchService) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
 	s.initOnce.Do(func() {
 		store, err := core.OpenStore(s.dataPath)
 		if err != nil {
 			s.initErr = fmt.Errorf("open usage store: %w", err)
 			return
 		}
+		cache, err := indexcache.Open(filepath.Join(filepath.Dir(s.dataPath), "cache"))
+		if err != nil {
+			log.Printf("index cache: %v; search starts uncached", err)
+		}
+
 		mgr := kyvroplugin.NewManager(s.pluginsDir, store, nil)
 		mgr.LoadAll() // single-plugin failures are logged, not fatal
 		installer := kyvroplugin.NewInstaller(s.pluginsDir)
-		appsProvider := apps.New(s.source)
+
+		// Seed the apps provider from cache/app-index.json; degradation is
+		// fine, the background warmup rescans.
+		var appSeed []core.AppIndexEntry
+		if cache != nil {
+			if f, err := cache.LoadAppIndex(); err != nil {
+				log.Printf("app index cache: %v", err)
+			} else {
+				appSeed = f.Entries
+			}
+		}
+		appsProvider := apps.NewWithCache(s.source, appSeed)
+
+		// Folder controller seeds from bbolt + cache/folder-index.json.
+		var folderCtl *folders.Controller
+		if cache != nil {
+			folderCtl = folders.NewController(store, cache)
+			if err := folderCtl.LoadAtStartup(); err != nil {
+				log.Printf("folders: startup load: %v", err)
+			}
+		} else {
+			// No cache dir: a controller over a nil cache is unusable;
+			// folder search simply stays empty until restart.
+			folderCtl = folders.NewController(store, nil)
+		}
+
+		var folderProvider core.Provider = folderCtl.Provider()
 		engine := core.NewEngine(
-			[]core.Provider{calc.New(), appsProvider, mgr.Provider(), web.New()},
+			[]core.Provider{calc.New(), appsProvider, folderProvider, mgr.Provider(), web.New()},
 			store,
 			0, // DefaultLimit
 		)
-		go appsProvider.Warmup()
 
+		// The cache hook must be registered before Warmup so the very first
+		// rescan already persists app-index.json.
+		if cache != nil {
+			c := cache
+			appsProvider.SetCacheHook(func(list []core.AppEntry) {
+				if err := c.SaveAppIndex(apps.AppIndexEntries(list)); err != nil {
+					log.Printf("app index cache: save: %v", err)
+				}
+			})
+		}
+		go appsProvider.Warmup()
+		go folderCtl.BackgroundRefresh(ctx)
+
+		// TODO(snippets): Text Snippets is temporarily disabled; restore this
+		// block to re-enable global text expansion (snippets service init,
+		// expander creation and the startup refresh).
+		//
 		// Initialize snippets service
-		snippets := core.NewSnippetsService(store)
+		// snippets := core.NewSnippetsService(store)
 
 		s.store = store
 		s.mgr = mgr
 		s.installer = installer
 		s.engine = engine
-		s.snippets = snippets
-		s.textExpander = platform.NewTextExpander()
+		s.pathOpener = platform.NewPathOpener()
+		s.folderCtl = folderCtl
 
-		if enabled, err := s.SnippetsEnabled(); err == nil && enabled {
-			if err := s.refreshTextExpander(); err != nil {
-				log.Printf("snippets: start expander: %v", err)
-			}
-		}
+		// TODO(snippets): disabled together with the feature — see the field
+		// comments on SearchService and the block above in ServiceStartup.
+		// s.snippets = snippets
+		// s.textExpander = platform.NewTextExpander()
+		//
+		// if enabled, err := s.SnippetsEnabled(); err == nil && enabled {
+		// 	if err := s.refreshTextExpander(); err != nil {
+		// 		log.Printf("snippets: start expander: %v", err)
+		// 	}
+		// }
 	})
 	return s.initErr
 }
@@ -148,82 +235,173 @@ func (s *SearchService) Search(query string) ([]core.SearchResult, error) {
 	return results, nil
 }
 
-// Launch activates the result with the given ID (from the last Search),
-// records usage and hides the summon window.
-func (s *SearchService) Launch(id string) error {
-	s.mu.Lock()
-	r, ok := s.last[id]
-	s.mu.Unlock()
-	if !ok {
-		return fmt.Errorf("no search result with id %q", id)
-	}
-
-	var err error
-	switch r.Action.Kind {
-	case core.ActionLaunchApp:
-		err = s.launcher.Launch(core.AppEntry{ID: r.ID, Name: r.Title, Path: r.Action.Arg})
-	case core.ActionOpenURL:
-		err = platform.OpenURL(s.externalBrowser(), r.Action.Arg)
-	case core.ActionCopyText:
-		if !application.Get().Clipboard.SetText(r.Action.Arg) {
-			err = fmt.Errorf("copy to clipboard failed")
-		}
-	case core.ActionPlugin:
-		err = fmt.Errorf("plugin actions must go through RunAction")
-	default:
-		err = fmt.Errorf("unknown action kind %d", r.Action.Kind)
-	}
-	if err != nil {
-		return err
-	}
-
-	if s.store != nil {
-		if rerr := s.store.Record(id, time.Now()); rerr != nil {
-			log.Printf("store: record %q: %v", id, rerr)
-		}
-	}
-	return nil
-}
-
-// RunAction dispatches a plugin row (command or callback) from the last
-// Search to its plugin and returns the secondary result list. Rows whose
-// actions are open-url/copy keep flowing through Launch: the returned rows
-// are merged into the same session cache, so activating them works with no
-// extra plumbing. An empty list means "nothing to show" (the frontend hides
-// the window).
-func (s *SearchService) RunAction(id string) ([]core.SearchResult, error) {
+// Execute activates the result with the given ID (from the last Search).
+// An empty actionID runs the PrimaryAction; otherwise the ActionItem with
+// the matching ID runs. Plugin actions return a secondary result list
+// (merged into the session cache for further activation); every terminal
+// action returns nil, which the UI treats as "hide the window". Usage is
+// recorded against the result ID on success.
+func (s *SearchService) Execute(id, actionID string) ([]core.SearchResult, error) {
 	s.mu.Lock()
 	r, ok := s.last[id]
 	s.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("no search result with id %q", id)
 	}
-	if r.Action.Kind != core.ActionPlugin {
-		return nil, fmt.Errorf("result %q is not a plugin action", id)
-	}
-	if s.mgr == nil {
-		return nil, fmt.Errorf("plugin system unavailable")
+
+	action := r.PrimaryAction
+	if actionID != "" {
+		item, ok := findActionItem(r.Actions, actionID)
+		if !ok {
+			return nil, fmt.Errorf("result %q has no action %q", id, actionID)
+		}
+		action = item.Action
 	}
 
-	results, err := s.mgr.RunAction(context.Background(), r.Action.PluginID, r.Action.ActionID, r.Action.Args)
+	var err error
+	switch action.Kind {
+	case core.ActionLaunchApp:
+		if s.launcher == nil {
+			err = fmt.Errorf("launcher unavailable")
+			break
+		}
+		err = s.launcher.Launch(core.AppEntry{ID: r.ID, Name: r.Title, Path: action.Arg})
+	case core.ActionOpenURL:
+		err = platform.OpenURL(s.externalBrowser(), action.Arg)
+	case core.ActionCopyText:
+		if s.clipboard == nil {
+			err = fmt.Errorf("clipboard unavailable")
+			break
+		}
+		err = s.clipboard.WriteText(action.Arg)
+	case core.ActionOpenPath:
+		if s.pathOpener == nil {
+			err = fmt.Errorf("path opener unavailable")
+			break
+		}
+		err = s.pathOpener.OpenPath(action.Arg)
+	case core.ActionRevealPath:
+		if s.pathOpener == nil {
+			err = fmt.Errorf("path opener unavailable")
+			break
+		}
+		err = s.pathOpener.RevealPath(action.Arg)
+	case core.ActionPlugin:
+		return s.runPluginAction(id, action)
+	default:
+		err = fmt.Errorf("unknown action kind %d", action.Kind)
+	}
 	if err != nil {
 		return nil, err
 	}
+	s.recordUsage(id)
+	return nil, nil
+}
 
-	// IDs are plugin-namespaced, so merging cannot clash with first-level
-	// rows or other plugins' rows.
+// runPluginAction dispatches to the plugin manager and merges the returned
+// secondary rows into the session cache (IDs are plugin-namespaced, so
+// they cannot clash with first-level rows).
+func (s *SearchService) runPluginAction(id string, action core.Action) ([]core.SearchResult, error) {
+	if s.mgr == nil {
+		return nil, fmt.Errorf("plugin system unavailable")
+	}
+	results, err := s.mgr.RunAction(context.Background(), action.PluginID, action.ActionID, action.Args)
+	if err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	for _, res := range results {
 		s.last[res.ID] = res
 	}
 	s.mu.Unlock()
+	s.recordUsage(id)
+	return results, nil
+}
 
-	if s.store != nil {
-		if rerr := s.store.Record(id, time.Now()); rerr != nil {
-			log.Printf("store: record %q: %v", id, rerr)
+// findActionItem locates a secondary action by its ID.
+func findActionItem(items []core.ActionItem, actionID string) (core.ActionItem, bool) {
+	for _, item := range items {
+		if item.ID == actionID {
+			return item, true
 		}
 	}
-	return results, nil
+	return core.ActionItem{}, false
+}
+
+// recordUsage bumps the frecency counter of the activated result.
+func (s *SearchService) recordUsage(id string) {
+	if s.store == nil {
+		return
+	}
+	if err := s.store.Record(id, time.Now()); err != nil {
+		log.Printf("store: record %q: %v", id, err)
+	}
+}
+
+// Folder source management (thin bridges to the folders controller).
+
+// FolderSources lists every configured folder source with scan status.
+func (s *SearchService) FolderSources() ([]core.FolderSourceInfo, error) {
+	if s.folderCtl == nil {
+		return nil, fmt.Errorf("search service not started")
+	}
+	return s.folderCtl.Sources(), nil
+}
+
+// AddFolderSource registers and synchronously scans a new root.
+func (s *SearchService) AddFolderSource(path string, maxDepth int) (core.FolderSource, error) {
+	if s.folderCtl == nil {
+		return core.FolderSource{}, fmt.Errorf("search service not started")
+	}
+	return s.folderCtl.AddSource(context.Background(), path, maxDepth)
+}
+
+// RemoveFolderSource deletes a source and its index entries.
+func (s *SearchService) RemoveFolderSource(id string) error {
+	if s.folderCtl == nil {
+		return fmt.Errorf("search service not started")
+	}
+	return s.folderCtl.RemoveSource(id)
+}
+
+// SetFolderSourceEnabled toggles a source without dropping its cache.
+func (s *SearchService) SetFolderSourceEnabled(id string, enabled bool) error {
+	if s.folderCtl == nil {
+		return fmt.Errorf("search service not started")
+	}
+	return s.folderCtl.SetEnabled(context.Background(), id, enabled)
+}
+
+// RefreshFolderSource rescans one source.
+func (s *SearchService) RefreshFolderSource(id string) error {
+	if s.folderCtl == nil {
+		return fmt.Errorf("search service not started")
+	}
+	return s.folderCtl.RefreshSource(context.Background(), id)
+}
+
+// RefreshAllFolderSources rescans every enabled source.
+func (s *SearchService) RefreshAllFolderSources() error {
+	if s.folderCtl == nil {
+		return fmt.Errorf("search service not started")
+	}
+	return s.folderCtl.RefreshAll(context.Background())
+}
+
+// PickFolderSourcePath opens the native directory chooser and returns the
+// selected path. An empty string with a nil error means the user cancelled;
+// no configuration is written here.
+func (s *SearchService) PickFolderSourcePath() (string, error) {
+	app := application.Get()
+	if app == nil || app.Dialog == nil {
+		return "", fmt.Errorf("dialog unavailable")
+	}
+	return app.Dialog.OpenFile().
+		CanChooseFiles(false).
+		CanChooseDirectories(true).
+		CanCreateDirectories(false).
+		SetTitle("Choose Folder").
+		PromptForSingleSelection()
 }
 
 // Plugins returns every loaded plugin (including disabled ones) for the
@@ -450,6 +628,13 @@ func (s *SearchService) AllPlugins() ([]kyvroplugin.PluginInfo, error) {
 }
 
 // Snippets methods
+//
+// TODO(snippets): the Text Snippets feature is temporarily disabled and kept
+// for a future release. These bound methods (and their generated frontend
+// bindings) remain in place so nothing needs regenerating when the feature
+// returns; with s.snippets/s.textExpander left nil, Snippets() returns an
+// empty list and the mutation methods report "snippets service not
+// initialized". Data in bbolt ("snippets" namespace) is preserved.
 
 // Snippets returns all configured text snippets.
 func (s *SearchService) Snippets() ([]core.Snippet, error) {

@@ -4,8 +4,9 @@
 
 /**
  * SearchService is bound to the frontend by Wails. Search feeds the result
- * list; Launch activates a result from the most recent Search and records
- * usage (frecency); the plugin methods back the settings window.
+ * list; Execute activates a result (or one of its secondary actions) from
+ * the most recent Search and records usage (frecency); the plugin and
+ * folder methods back the settings window.
  * 
  * The engine, store and providers are constructed lazily in ServiceStartup:
  * the single-instance guard inside application.New must get the chance to
@@ -25,6 +26,18 @@ import * as core$0 from "../internal/core/models.js";
 import * as plugin$0 from "../internal/plugin/models.js";
 
 /**
+ * AddFolderSource registers and synchronously scans a new root.
+ * @param {string} path
+ * @param {number} maxDepth
+ * @returns {$CancellablePromise<core$0.FolderSource>}
+ */
+export function AddFolderSource(path, maxDepth) {
+    return $Call.ByID(3442979147, path, maxDepth).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType0($result);
+    }));
+}
+
+/**
  * AddSnippet adds a new text snippet.
  * @param {string} trigger
  * @param {string} replacement
@@ -40,7 +53,7 @@ export function AddSnippet(trigger, replacement) {
  */
 export function AllPlugins() {
     return $Call.ByID(845651830).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType1($result);
+        return $$createType2($result);
     }));
 }
 
@@ -50,7 +63,7 @@ export function AllPlugins() {
  */
 export function AvailablePlugins() {
     return $Call.ByID(1804721074).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType3($result);
+        return $$createType4($result);
     }));
 }
 
@@ -61,7 +74,24 @@ export function AvailablePlugins() {
  */
 export function Browsers() {
     return $Call.ByID(1142220318).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType4($result);
+        return $$createType5($result);
+    }));
+}
+
+/**
+ * Execute activates the result with the given ID (from the last Search).
+ * An empty actionID runs the PrimaryAction; otherwise the ActionItem with
+ * the matching ID runs. Plugin actions return a secondary result list
+ * (merged into the session cache for further activation); every terminal
+ * action returns nil, which the UI treats as "hide the window". Usage is
+ * recorded against the result ID on success.
+ * @param {string} id
+ * @param {string} actionID
+ * @returns {$CancellablePromise<core$0.SearchResult[]>}
+ */
+export function Execute(id, actionID) {
+    return $Call.ByID(2894020374, id, actionID).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType7($result);
     }));
 }
 
@@ -75,6 +105,16 @@ export function ExternalBrowser() {
 }
 
 /**
+ * FolderSources lists every configured folder source with scan status.
+ * @returns {$CancellablePromise<core$0.FolderSourceInfo[]>}
+ */
+export function FolderSources() {
+    return $Call.ByID(1684839075).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType9($result);
+    }));
+}
+
+/**
  * InstallPlugin installs a plugin from the official registry by ID.
  * @param {string} id
  * @returns {$CancellablePromise<void>}
@@ -84,13 +124,13 @@ export function InstallPlugin(id) {
 }
 
 /**
- * Launch activates the result with the given ID (from the last Search),
- * records usage and hides the summon window.
- * @param {string} id
- * @returns {$CancellablePromise<void>}
+ * PickFolderSourcePath opens the native directory chooser and returns the
+ * selected path. An empty string with a nil error means the user cancelled;
+ * no configuration is written here.
+ * @returns {$CancellablePromise<string>}
  */
-export function Launch(id) {
-    return $Call.ByID(1704679484, id);
+export function PickFolderSourcePath() {
+    return $Call.ByID(3139331788);
 }
 
 /**
@@ -100,8 +140,34 @@ export function Launch(id) {
  */
 export function Plugins() {
     return $Call.ByID(444198097).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType1($result);
+        return $$createType2($result);
     }));
+}
+
+/**
+ * RefreshAllFolderSources rescans every enabled source.
+ * @returns {$CancellablePromise<void>}
+ */
+export function RefreshAllFolderSources() {
+    return $Call.ByID(3858442937);
+}
+
+/**
+ * RefreshFolderSource rescans one source.
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function RefreshFolderSource(id) {
+    return $Call.ByID(2530920235, id);
+}
+
+/**
+ * RemoveFolderSource deletes a source and its index entries.
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function RemoveFolderSource(id) {
+    return $Call.ByID(1985581934, id);
 }
 
 /**
@@ -132,29 +198,13 @@ export function RevealPluginsFolder() {
 }
 
 /**
- * RunAction dispatches a plugin row (command or callback) from the last
- * Search to its plugin and returns the secondary result list. Rows whose
- * actions are open-url/copy keep flowing through Launch: the returned rows
- * are merged into the same session cache, so activating them works with no
- * extra plumbing. An empty list means "nothing to show" (the frontend hides
- * the window).
- * @param {string} id
- * @returns {$CancellablePromise<core$0.SearchResult[]>}
- */
-export function RunAction(id) {
-    return $Call.ByID(3268022454, id).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType6($result);
-    }));
-}
-
-/**
  * Search runs the engine for query and caches the results for Launch.
  * @param {string} query
  * @returns {$CancellablePromise<core$0.SearchResult[]>}
  */
 export function Search(query) {
     return $Call.ByID(2004525483, query).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType6($result);
+        return $$createType7($result);
     }));
 }
 
@@ -166,6 +216,16 @@ export function Search(query) {
  */
 export function SetExternalBrowser(app) {
     return $Call.ByID(2443523026, app);
+}
+
+/**
+ * SetFolderSourceEnabled toggles a source without dropping its cache.
+ * @param {string} id
+ * @param {boolean} enabled
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetFolderSourceEnabled(id, enabled) {
+    return $Call.ByID(804849789, id, enabled);
 }
 
 /**
@@ -212,7 +272,7 @@ export function SnippetAccessibilityGranted() {
  */
 export function Snippets() {
     return $Call.ByID(20510241).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType8($result);
+        return $$createType11($result);
     }));
 }
 
@@ -242,12 +302,15 @@ export function Version() {
 }
 
 // Private type creation functions
-const $$createType0 = plugin$0.PluginInfo.createFrom;
-const $$createType1 = $Create.Array($$createType0);
-const $$createType2 = plugin$0.RemotePlugin.createFrom;
-const $$createType3 = $Create.Array($$createType2);
-const $$createType4 = $Create.Array($Create.Any);
-const $$createType5 = core$0.SearchResult.createFrom;
-const $$createType6 = $Create.Array($$createType5);
-const $$createType7 = core$0.Snippet.createFrom;
-const $$createType8 = $Create.Array($$createType7);
+const $$createType0 = core$0.FolderSource.createFrom;
+const $$createType1 = plugin$0.PluginInfo.createFrom;
+const $$createType2 = $Create.Array($$createType1);
+const $$createType3 = plugin$0.RemotePlugin.createFrom;
+const $$createType4 = $Create.Array($$createType3);
+const $$createType5 = $Create.Array($Create.Any);
+const $$createType6 = core$0.SearchResult.createFrom;
+const $$createType7 = $Create.Array($$createType6);
+const $$createType8 = core$0.FolderSourceInfo.createFrom;
+const $$createType9 = $Create.Array($$createType8);
+const $$createType10 = core$0.Snippet.createFrom;
+const $$createType11 = $Create.Array($$createType10);

@@ -20,10 +20,10 @@ func TestFallbackEntry(t *testing.T) {
 	if r.ID != "web:go generics" {
 		t.Fatalf("id = %q", r.ID)
 	}
-	if r.Action.Kind != 1 { // ActionOpenURL
-		t.Fatalf("kind = %d, want ActionOpenURL", r.Action.Kind)
+	if r.PrimaryAction.Kind != 1 { // ActionOpenURL
+		t.Fatalf("kind = %d, want ActionOpenURL", r.PrimaryAction.Kind)
 	}
-	if r.Action.Arg != "https://www.google.com/search?q=go+generics" {
-		t.Fatalf("unexpected action arg: %q", r.Action.Arg)
+	if r.PrimaryAction.Arg != "https://www.google.com/search?q=go+generics" {
+		t.Fatalf("unexpected action arg: %q", r.PrimaryAction.Arg)
 	}
 }

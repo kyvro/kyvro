@@ -46,7 +46,7 @@ func TestProviderCommandSurfacing(t *testing.T) {
 	if r.Title != "Test Command" {
 		t.Errorf("Title = %q", r.Title)
 	}
-	a := r.Action
+	a := r.PrimaryAction
 	if a.Kind != core.ActionPlugin || a.PluginID != "com.example.test" || a.ActionID != "test.cmd" {
 		t.Errorf("action = %+v", a)
 	}

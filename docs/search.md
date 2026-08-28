@@ -1,328 +1,149 @@
-# Kyvro Search Core Spec
+# Kyvro Core Search 升级规格
 
 ## 1. 文档目标
 
-本文档定义 Kyvro 搜索核心的第一阶段设计，以及未来插件系统对搜索结果的扩展方式。
+本文档定义 Kyvro 核心搜索模块的下一阶段升级规格。内容基于 `docs/original/search.md`，并对照当前代码库实现校准。
 
-当前阶段重点：
+文档分工：本文负责搜索架构、Result / Action 模型、Folder 搜索语义、Engine 语义、Service API、平台与 UI 要求；索引分类、存储布局、扫描时机与建立/更新流程由 [index.md](./index.md) 负责，两文以引用互链。
 
-- 提供统一搜索入口。
-- 支持本地应用程序搜索。
-- 支持用户配置项目/目录根路径，并将目录写入索引后进行快速搜索。
-- 定义统一的搜索结果模型。
-- 定义统一 Action 模型，为后续插件扩展点击行为、快捷键行为预留能力。
-- 暂不引入 Capability / Trait 模型。
-- 暂不实现 URL、Command、Text 类型的实际 Provider，仅预留 ResultKind。
+本次升级目标是把现有的应用 / 插件 / Web 启动器搜索，扩展为更完整的本地启动器 Core：支持用户配置目录根路径并建立 Folder 索引，同时提供更丰富的结果与 Action 契约。平台细节与插件业务逻辑仍不能进入 `internal/core`。
 
----
+## 2. 当前基线
 
-## 2. 设计原则
+当前搜索链路：
 
-### 2.1 Core 负责搜索基础设施
+```text
+frontend/App.vue
+    -> service.SearchService.Search(query)
+    -> internal/core.Engine
+       providers 按优先级顺序：
+         1. calc
+         2. apps
+         3. plugins
+         4. web
+    -> []core.SearchResult
+```
 
-Kyvro Core 负责：
+当前 provider 顺序具有业务语义。`Engine.Search` 会按顺序消费 provider，并在结果数量达到 limit 后停止访问后续 provider。早出现的 provider 永远排在后出现的 provider 前面，不受分数跨 provider 比较影响。这个规则保证计算器结果在最前，本地 App 高于插件，插件高于 Web，Web 始终作为尾部兜底。
 
-- 接收用户搜索输入。
-- 调用多个 Provider。
-- 合并搜索结果。
-- 排序与去重。
-- 维护本地索引。
-- 提供统一的 Result 数据结构。
-- 提供统一的 Action 执行机制。
-- 提供默认主操作（Primary Action）。
-- 提供基础快捷操作。
+当前 Core 模型：
 
-Core 不负责：
+```go
+type SearchResult struct {
+    ID       string
+    Title    string
+    Subtitle string
+    Action   Action
+    Score    float64
+    IconPath string
+}
 
-- Git 项目管理。
-- VS Code / Cursor / IDEA 等 IDE 的具体业务集成。
-- GitHub / Docker / SSH / AI 等高级项目能力。
-- 复杂业务工作流。
+type Action struct {
+    Kind     ActionKind
+    Arg      string
+    PluginID string
+    ActionID string
+    Args     []string
+}
+```
 
-这些能力未来由插件扩展。
+当前内置 Action 类型：
 
----
+- `ActionLaunchApp`
+- `ActionOpenURL`
+- `ActionCopyText`
+- `ActionPlugin`
 
-## 3. 搜索整体架构
+当前 frecency 公式：
+
+```text
+score = fuzzyScore + 8 * log2(count + 1) + 12 * 2^(-ageHours / 72)
+```
+
+使用历史存储在 bbolt 的 `usage` bucket 中，数据库路径为 `~/Library/Application Support/Kyvro/data.db`，key 为结果 ID。Store 必须在 `ServiceStartup` 内、单实例保护生效后再打开，避免重复进程争抢 bbolt 锁。
+
+## 3. 升级范围
+
+### 必须交付
+
+- 基于用户配置的根目录增加一等 Folder 搜索。
+- 将 Folder source 配置和扫描得到的 Folder index entries 持久化到现有 bbolt store。
+- 保持 App 搜索、计算器搜索、插件搜索和 Web 兜底行为不退化。
+- 引入可描述结果类型、结构化元数据、主操作和附加操作的结果模型。
+- 在 service 层引入统一 Action 执行机制，让 UI 不需要按结果类型决定如何启动。
+- 保持 `internal/core` 为纯 Go 层，不引入 Wails 或具体平台实现。
+- 为 core model、rank、store、engine、provider 的行为变化补充单元测试。
+
+### 本次不交付
+
+- 全盘文件搜索。
+- 文件内容索引。
+- Core 内置 Git 项目识别。
+- Core 内置 VS Code / Cursor / IDEA 等 IDE 打开逻辑。
+- 插件对现有 Core 结果动态追加 Action。
+- Capability / Trait / Entity Type 系统。
+- 除当前已实现的 calculator、web、plugin 行为外，不新增 URL / Command / Text Provider。
+
+## 4. 目标架构
 
 ```text
 Search Input
-    │
-    ▼
-SearchService
-    │
-    ▼
-Search Engine
-    │
-    ├── AppProvider
-    │      └── App Index
-    │
-    ├── FolderProvider
-    │      └── Folder Index
-    │
-    └── PluginProvider
-           └── Future Plugin Results
-    │
-    ▼
-Result Merge
-    │
-    ├── Score
-    ├── Deduplicate
-    └── Limit
-    │
-    ▼
-SearchResult[]
-    │
-    ▼
-UI
-    │
-    ├── Enter
-    ├── Shortcut
-    └── Action Menu
-    │
-    ▼
-ActionExecutor
+    -> SearchService
+    -> Engine
+       -> CalcProvider
+       -> AppProvider
+       -> FolderProvider
+       -> PluginProvider
+       -> WebProvider
+    -> merged SearchResult[]
+    -> UI
+       -> Enter: Execute PrimaryAction
+       -> shortcut/menu: Execute ActionItem.Action
+    -> SearchService.ExecuteAction / Launch compatibility wrapper
 ```
 
-第一阶段主要 Provider：
+目标 provider 顺序：
 
 ```text
-AppProvider
-FolderProvider
+calc -> apps -> folders -> plugins -> web
 ```
 
-未来：
+设计理由：
 
-```text
-PluginProvider
-WebProvider
-CommandProvider
-...
-```
+- Calculator 继续作为即时答案 provider。
+- Apps 继续作为启动器的主要本地入口。
+- Folders 是一等本地结果，应排在第三方插件结果前。
+- Plugins 继续排在 Web 之前。
+- Web 继续固定在最后，不能挤掉本地结果。
 
----
+## 5. Result 模型
 
-## 4. ResultKind
-
-第一阶段只定义以下 ResultKind：
+升级后的模型应增加结果类型和附加操作，同时控制 Wails 绑定迁移成本。
 
 ```go
 type ResultKind string
 
 const (
-    KindFolder  ResultKind = "folder"
     KindApp     ResultKind = "app"
+    KindFolder  ResultKind = "folder"
     KindURL     ResultKind = "url"
     KindCommand ResultKind = "command"
     KindText    ResultKind = "text"
 )
-```
 
-说明：
-
-| Kind | 当前状态 | 说明 |
-|---|---|---|
-| `folder` | ✅ 支持 | 用户配置目录后，将目标文件夹加入本地索引并搜索 |
-| `app` | ✅ 支持 | 自动扫描操作系统中的本地应用程序 |
-| `url` | ⏳ 预留 | 未来用于书签、网页搜索、GitHub Repo、插件网络结果等 |
-| `command` | ⏳ 预留 | 未来用于插件命令、系统命令、工具命令 |
-| `text` | ⏳ 预留 | 未来用于计算结果、转换结果、Snippet、纯文本结果 |
-
-当前阶段不实现 Capability。
-
-例如“项目”暂时表现为：
-
-```text
-KindFolder
-```
-
-Core 不需要区分：
-
-```text
-普通目录
-Git 项目
-Node 项目
-Go 项目
-Rust 项目
-```
-
-后续如果需要更强语义能力，再考虑 Capability / Metadata 扩展。
-
----
-
-## 5. SearchResult
-
-建议统一模型：
-
-```go
 type SearchResult struct {
     ID       string
     Kind     ResultKind
-
     Title    string
     Subtitle string
-
     Score    float64
+    IconPath string
 
-    Data     map[string]any
-
+    Data          map[string]any
     PrimaryAction Action
     Actions       []ActionItem
 }
-```
 
-### 5.1 字段说明
-
-#### ID
-
-结果唯一 ID。
-
-示例：
-
-```text
-app:com.microsoft.VSCode
-folder:/Users/user/Code/kyvro
-```
-
-要求：
-
-- 同一个对象 ID 稳定。
-- Provider 多次搜索返回同一对象时 ID 不变化。
-- 用于去重、历史记录、使用频率排序。
-
----
-
-#### Kind
-
-结果基础类型。
-
-例如：
-
-```text
-KindApp
-KindFolder
-```
-
----
-
-#### Title
-
-主要展示文本。
-
-App：
-
-```text
-Visual Studio Code
-```
-
-Folder：
-
-```text
-kyvro
-```
-
----
-
-#### Subtitle
-
-辅助信息。
-
-App：
-
-```text
-/Applications/Visual Studio Code.app
-```
-
-Folder：
-
-```text
-~/Code/kyvro
-```
-
----
-
-#### Score
-
-Provider 给出的基础搜索评分。
-
-最终排序可以进一步结合：
-
-```text
-Provider Score
-+
-使用频率
-+
-最近使用
-+
-精确匹配奖励
-+
-前缀匹配奖励
-```
-
----
-
-#### Data
-
-存储对应 Kind 的结构化数据。
-
-第一阶段允许使用：
-
-```go
-map[string]any
-```
-
-但字段必须由 Core 统一约定，避免 Provider 随意定义。
-
-App 示例：
-
-```json
-{
-  "path": "/Applications/Visual Studio Code.app",
-  "bundleId": "com.microsoft.VSCode"
-}
-```
-
-Folder 示例：
-
-```json
-{
-  "path": "/Users/user/Code/kyvro"
-}
-```
-
----
-
-## 6. Action 模型
-
-搜索结果不应该让 UI 自己判断“怎么打开”。
-
-所有行为统一通过 Action 描述。
-
-```go
-type Action struct {
-    Kind string
-    Args map[string]any
-}
-```
-
-例如：
-
-```go
-Action{
-    Kind: "open-path",
-    Args: map[string]any{
-        "path": "/Users/user/Code/kyvro",
-    },
-}
-```
-
----
-
-## 7. ActionItem
-
-搜索结果可以有多个附加操作。
-
-```go
 type ActionItem struct {
     ID       string
     Title    string
@@ -331,275 +152,72 @@ type ActionItem struct {
 }
 ```
 
-例如 Folder：
+`ActionItem.Shortcut` 第一版使用字符串，例如 `cmd+enter`、`cmd+c`。这样绑定和 UI 实现最简单。未来如果要支持跨平台快捷键差异、冲突检测或用户自定义快捷键，再迁移到结构化表示。
 
-```text
-Enter
-→ Open
+兼容规则：迁移期间可以保留现有 `Action` 字段作为 `PrimaryAction` 的废弃别名；也可以一次性更新前端绑定和所有调用点。只要修改了 Wails 绑定可见的 service/model 字段，就必须执行：
 
-⌘ Enter
-→ Reveal in Finder
-
-⌘ C
-→ Copy Path
+```sh
+~/Go.proj/bin/wails3 generate bindings -d frontend/bindings -clean -names
+pnpm --dir frontend build
 ```
 
-对应：
+### 稳定 ID
+
+Frecency 以结果 ID 为 key，因此 ID 必须稳定。
+
+必需前缀：
+
+- Apps：直接使用 `app:<bundleID>`；如果 bundle ID 缺失，使用 `app:path:<absolute-app-path>` 作为稳定 fallback。
+- Folders：`folder:<absolute-path>`
+- Calculator：`calc:<normalized-expression>`
+- Web：`web:<raw-query>`
+- Plugins：沿用当前 `plugin:<pluginID>:<resultID>`
+
+App result ID 不需要兼容当前内存中的 bundle ID / path 形式。本次升级可以直接切到 `app:<bundleID>`，并接受现有 App frecency 重置。
+
+## 6. Action 模型
+
+现有 `ActionKind` enum 可以扩展，不需要整体替换。
+
+必需 Action 类型：
+
+- `ActionLaunchApp`：按路径启动 `.app`。
+- `ActionOpenURL`：通过用户配置的外部浏览器打开 URL。
+- `ActionCopyText`：在 service 层通过 Wails clipboard 复制文本。
+- `ActionPlugin`：通过 `RunAction` 分发插件 command/callback。
+- `ActionOpenPath`：使用系统默认处理器打开文件系统路径。
+- `ActionRevealPath`：在 macOS Finder 中 reveal 文件系统路径。
+
+`internal/core` 只定义 Action payload。具体执行由 `service` 和 `internal/platform` 负责。
+
+目标 Action payload：
 
 ```go
-SearchResult{
-    Kind: KindFolder,
-
-    PrimaryAction: Action{
-        Kind: "open-path",
-    },
-
-    Actions: []ActionItem{
-        {
-            ID:       "reveal",
-            Title:    "Reveal in Finder",
-            Shortcut: "cmd+enter",
-            Action: Action{
-                Kind: "reveal-path",
-            },
-        },
-        {
-            ID:       "copy-path",
-            Title:    "Copy Path",
-            Shortcut: "cmd+c",
-            Action: Action{
-                Kind: "copy",
-            },
-        },
-    },
+type Action struct {
+    Kind     ActionKind
+    Arg      string
+    PluginID string
+    ActionID string
+    Args     []string
 }
 ```
 
----
-
-## 8. 第一阶段 Action 类型
-
-建议 Core 第一阶段内置：
+Folder 行为：
 
 ```text
-open-path
-reveal-path
-launch-app
-copy
+PrimaryAction: ActionOpenPath(path)
+Actions:
+  - reveal: ActionRevealPath(path), shortcut cmd+enter
+  - copy-path: ActionCopyText(path), shortcut cmd+c
 ```
 
-未来可增加：
+UI 不应通过 `ResultKind` 决定启动逻辑。UI 可以为了图标、样式、展示方式读取 kind 或 ID prefix，但执行行为必须由 Action 描述。
 
-```text
-open-url
-callback
-open-with-app
-```
+## 7. Folder 搜索
 
-但第一阶段可以不实现。
+Folder 搜索索引用户配置根目录下的目录。它不是文件系统搜索引擎。
 
----
-
-## 9. UI 与 Action 解耦
-
-UI 不应该存在：
-
-```go
-switch result.Kind {
-case KindFolder:
-    ...
-case KindApp:
-    ...
-}
-```
-
-UI 只处理：
-
-```text
-Enter
-→ PrimaryAction
-
-Shortcut
-→ 找到对应 ActionItem
-→ Execute
-
-Action Menu
-→ 展示 result.Actions
-```
-
-统一调用：
-
-```go
-ActionExecutor.Execute(action)
-```
-
-这样未来增加新的 ResultKind 或插件 Action 时，不需要修改搜索 UI。
-
----
-
-# 10. App 搜索
-
-## 10.1 目标
-
-自动扫描操作系统中的本地应用程序，并建立快速搜索索引。
-
-用户无需手动配置 App 路径。
-
----
-
-## 10.2 macOS 第一阶段扫描范围
-
-建议至少扫描：
-
-```text
-/Applications
-/System/Applications
-~/Applications
-```
-
-识别：
-
-```text
-*.app
-```
-
-读取基础信息：
-
-```text
-应用名称
-.app 路径
-Bundle Identifier
-Icon
-```
-
-例如：
-
-```text
-Visual Studio Code
-/Applications/Visual Studio Code.app
-com.microsoft.VSCode
-```
-
----
-
-## 10.3 AppIndex
-
-启动阶段扫描应用后建立 AppIndex。
-
-示例：
-
-```go
-type AppIndexItem struct {
-    ID       string
-    Name     string
-    Path     string
-    BundleID string
-}
-```
-
-建议主要在内存搜索。
-
-必要时可将扫描结果持久化，启动后快速恢复，再异步刷新。
-
----
-
-## 10.4 AppProvider
-
-用户输入：
-
-```text
-code
-```
-
-返回：
-
-```text
-Visual Studio Code
-/Applications/Visual Studio Code.app
-```
-
-Result：
-
-```go
-SearchResult{
-    ID:       "app:com.microsoft.VSCode",
-    Kind:     KindApp,
-    Title:    "Visual Studio Code",
-    Subtitle: "/Applications/Visual Studio Code.app",
-
-    Data: map[string]any{
-        "path": "/Applications/Visual Studio Code.app",
-        "bundleId": "com.microsoft.VSCode",
-    },
-
-    PrimaryAction: Action{
-        Kind: "launch-app",
-    },
-}
-```
-
----
-
-## 10.5 App 默认行为
-
-第一阶段：
-
-```text
-Enter
-→ Launch App
-```
-
-可选附加：
-
-```text
-Reveal in Finder
-Copy Path
-```
-
-后续插件可增加：
-
-```text
-Quit
-Force Quit
-Open New Window
-Open with Arguments
-Move Window
-```
-
-但这些不属于第一阶段。
-
----
-
-# 11. Folder 搜索
-
-## 11.1 定位
-
-Folder 搜索不是全盘文件搜索。
-
-它主要用于：
-
-```text
-项目
-Workspace
-工作目录
-常用目录
-```
-
-用户主动配置一个或多个 Root：
-
-```text
-~/Code
-~/Projects
-~/Work
-```
-
-Kyvro 对这些 Root 下的目录进行扫描，然后将目标目录加入索引。
-
----
-
-## 11.2 Folder Source 配置
-
-建议配置模型：
+### Folder Source
 
 ```go
 type FolderSource struct {
@@ -607,915 +225,363 @@ type FolderSource struct {
     Path     string
     MaxDepth int
     Enabled  bool
+    CreatedAt time.Time
+    UpdatedAt time.Time
 }
 ```
 
-例如：
+规则：
 
-```json
-{
-  "path": "~/Code",
-  "maxDepth": 2,
-  "enabled": true
-}
-```
+- `Path` 存储为绝对路径，并经过 clean。
+- `~` 必须在校验前展开。
+- 默认 `MaxDepth` 为 `1`。
+- `MaxDepth` 表示配置根目录下的目录层级。root 为 `~/Code` 且 depth 为 `1` 时，`~/Code/kyvro` 会进入索引，`~/Code/kyvro/internal` 不会进入索引。
+- disabled source 仍保留配置，但不贡献搜索结果。
 
-第一阶段默认：
-
-```text
-MaxDepth = 1
-```
-
-即：
-
-```text
-~/Code/kyvro
-~/Code/wallet
-~/Code/backend
-```
-
-都会成为索引项。
-
-但：
-
-```text
-~/Code/kyvro/internal
-~/Code/kyvro/src
-```
-
-不会继续进入索引。
-
-这样避免把目录搜索变成文件搜索。
-
----
-
-## 11.3 FolderIndex
-
-建议：
+### Folder Index Entry
 
 ```go
-type FolderIndexItem struct {
-    ID   string
-    Name string
-    Path string
+type FolderIndexEntry struct {
+    ID        string
+    Name      string
+    Path      string
+    SourceID  string
+    UpdatedAt time.Time
 }
 ```
 
-例如：
+规则：
 
-```text
-ID:
-folder:/Users/user/Code/kyvro
+- `ID = "folder:" + absolutePath`。
+- `Name = filepath.Base(path)`。
+- `Subtitle` 优先展示用户友好的路径；但 `Data["path"]` 和 action arg 必须使用绝对路径。
+- 默认排除隐藏目录和包 / 构建缓存目录：`.git`、`node_modules`、`vendor`、`dist`、`build`、`.next`、`.turbo`、`.cache`。
+- 默认不递归跟随 symlink 目录，除非后续显式引入该能力。
 
-Name:
-kyvro
+### Folder Provider
 
-Path:
-/Users/user/Code/kyvro
-```
+`FolderProvider` 搜索已加载到内存的持久化 Folder index。
 
----
+搜索行为：
 
-## 11.4 是否识别“项目”
+- 空查询返回所有 enabled folder entries，score 为 `0`；随后由 engine frecency 排序。
+- 非空查询使用与 App 搜索相同的 fuzzy 库。
+- 匹配 key 只包含 folder basename。第一版不匹配完整路径，避免路径片段让弱相关目录浮到前面。
+- Folder 搜索必须使用预构建的内存 search index，不允许每次搜索临时从 entries 生成 names/search keys。
+- 结果使用 `KindFolder`、`ActionOpenPath`、`ActionRevealPath` 和 `ActionCopyText`。
 
-第一阶段不需要。
-
-例如：
-
-```text
-~/Code/kyvro
-```
-
-无论内部有没有：
-
-```text
-.git
-package.json
-go.mod
-Cargo.toml
-```
-
-都可以先作为：
-
-```text
-KindFolder
-```
-
-进入搜索。
-
-后续 Projects Plugin 可以负责：
-
-```text
-Git 检测
-项目类型检测
-IDE 打开
-GitHub 地址
-Git 状态
-项目标签
-项目收藏
-```
-
-避免第一阶段 Core 过度复杂。
-
----
-
-## 11.5 FolderProvider
-
-用户输入：
-
-```text
-kyv
-```
-
-搜索：
-
-```text
-FolderIndex
-```
-
-返回：
-
-```text
-Kyvro
-~/Code/kyvro
-```
-
-Result：
+Folder 结果示例：
 
 ```go
 SearchResult{
-    ID:       "folder:/Users/user/Code/kyvro",
+    ID:       "folder:/Users/alice/Code/kyvro",
     Kind:     KindFolder,
     Title:    "kyvro",
     Subtitle: "~/Code/kyvro",
-
     Data: map[string]any{
-        "path": "/Users/user/Code/kyvro",
+        "path": "/Users/alice/Code/kyvro",
     },
-
-    PrimaryAction: Action{
-        Kind: "open-path",
+    PrimaryAction: Action{Kind: ActionOpenPath, Arg: "/Users/alice/Code/kyvro"},
+    Actions: []ActionItem{
+        {ID: "reveal", Title: "Reveal in Finder", Shortcut: "cmd+enter", Action: Action{Kind: ActionRevealPath, Arg: "/Users/alice/Code/kyvro"}},
+        {ID: "copy-path", Title: "Copy Path", Shortcut: "cmd+c", Action: Action{Kind: ActionCopyText, Arg: "/Users/alice/Code/kyvro"}},
     },
 }
 ```
 
----
+## 8. 状态与缓存存储
 
-## 11.6 Folder 默认行为
+本次升级将“用户状态”和“可重建索引缓存”分开存储：
 
-建议第一阶段：
+- bbolt 只保存不能随意丢弃的用户状态：`usage`（现有启动历史，格式不变）、`folder-sources`（Folder source 配置，source ID 为 key），以及 settings、snippets、plugins-state、plugin storage 等现有命名空间。
+- App / Folder index 不放入 bbolt，改为独立 cache 文件（`~/Library/Application Support/Kyvro/cache/app-index.json`、`folder-index.json`），由 `internal/indexcache` 统一管理；该组件只读写可重建缓存，不参与 usage / settings / plugin storage。
 
-```text
-Enter
-→ Open Folder
+分离原因、目录布局、缓存文件格式（`AppIndexFile` / `FolderIndexFile` / entry 字段 / `SearchKeys` 语义）、原子写入与损坏 / 未来版本降级、per-source 替换与删除、启动 enabled 过滤等细节，统一由 [index.md](./index.md) 负责（§1 索引分类、§2 存储布局、§4 建立与更新流程）。
 
-⌘ Enter
-→ Reveal in Finder
+契约级要求（实现细节见 index.md）：
 
-⌘ C
-→ Copy Path
-```
+- Store 或 cache 读取错误不能导致搜索崩溃：Engine / provider 降级为空缓存或已有内存缓存；配置或刷新操作中的错误通过 settings / refresh API 暴露。
+- Cache 文件写入必须使用临时文件 + rename 的原子替换，避免崩溃留下半截 JSON。
+- 不要持久化 `sahilm/fuzzy` 的内部数据——库没有可序列化的索引对象；持久化 Kyvro 自己的 index entry 与可稳定重建的 `SearchKeys`（见 index.md §1.2）。
+- App / Folder 共用同一套泛型内存索引 `SearchIndex[T]`（见 index.md §1.1）；搜索路径禁止每次 keypress 重建 names / search keys，必须使用预构建 `SearchIndex.Keys`。
 
-这里的 Open Folder 可以暂时定义为：
+## 9. 刷新流程
 
-```text
-使用系统默认行为打开目录
-```
+首版保持显式和简单：Add 后立即扫描并替换该 source 的缓存条目；Remove 删除配置与缓存条目；启动时加载缓存文件并后台扫描 enabled sources；手动刷新支持单 source 或全部 enabled。各触发时机总表与完整更新链见 [index.md](./index.md) §3（Scan 时机）、§4.3（Folder 更新链）。
 
-macOS 通常进入 Finder。
+本次升级不要求文件监听。扫描必须支持 `context.Context` 取消，并受 `MaxDepth` 限制。测试应使用临时目录；涉及时间的行为使用 fake clock。
 
-未来可以允许用户设置默认项目打开工具：
+## 10. 启动与索引构建流程
 
-```text
-Finder
-VS Code
-Cursor
-Terminal
-```
+本节明确当前启动建索引行为和改造后的目标行为。核心约束不变：bbolt store 必须在 Wails 单实例保护之后打开；启动器窗口和热键初始化不应被磁盘扫描阻塞。
 
-但不建议第一阶段把这些 IDE 逻辑硬编码在 Core。
+### 10.1 当前启动流程
 
----
-
-# 12. 索引持久化
-
-Folder 必须写入本地索引表，避免每次输入搜索时实时扫描磁盘。
-
-建议数据库：
+当前入口在 `main.go`：
 
 ```text
-data.db
+main
+    -> core.DefaultDataPath()
+       -> resolve ~/Library/Application Support/Kyvro/data.db
+       -> migrate Lumo config dir to Kyvro when needed
+    -> service.New(dataPath, platform.NewAppSource(), platform.NewAppLauncher())
+    -> application.New(...)
+       -> SingleInstance guard configured
+       -> SearchService registered as Wails service
+    -> create summon window / settings opener / hotkey / tray
+    -> app.Run()
+       -> SearchService.ServiceStartup(...)
 ```
 
-增加 bucket / table：
+`SearchService.ServiceStartup` 当前负责搜索核心初始化：
 
 ```text
-search_index
+ServiceStartup
+    -> core.OpenStore(dataPath)
+       -> create/open bbolt
+       -> ensure usage bucket
+    -> plugin.NewManager(pluginsDir, store, nil)
+    -> mgr.LoadAll()
+       -> load plugin manifests/runtime
+       -> single plugin failures logged, not fatal
+    -> apps.New(platform.AppSource)
+    -> core.NewEngine([calc, apps, plugins, web], store, DefaultLimit)
+    -> go appsProvider.Warmup()
+       -> platform.AppSource.Rescan()
+       -> scan /Applications, /System/Applications, ~/Applications
+       -> parse .app Info.plist / localized names / icon path
+       -> replace in-memory app cache
+    -> initialize snippets service and text expander
 ```
 
-也可以根据现有存储方案拆分：
+当前 App index 是内存索引：
+
+- `platform.AppSource.Rescan()` 重新扫描 macOS app roots。
+- `platform.AppSource.List()` 返回缓存 app 列表，不能阻塞磁盘 I/O。
+- `apps.Provider.Search()` 每次搜索先调用 `maybeRescan()`；如果上次扫描超过 60 秒，会后台触发一次 rescan。
+- 首次 `Warmup()` 也是后台 goroutine，因此搜索服务可先就绪，App 结果会在扫描完成后出现。
+- App 扫描结果不写入 bbolt；bbolt 当前只保存 usage、插件状态 / 存储、settings、snippets 等命名空间数据。
+
+当前启动时没有 Folder index：
+
+- 没有 Folder source 配置。
+- 没有 Folder scanner。
+- 没有 `folder-sources` / `folder-index` bucket。
+- 没有启动时加载 Folder 缓存的流程。
+
+### 10.2 改造后启动流程
+
+改造后仍由 `ServiceStartup` 组装搜索核心，但需要把 Folder index 的加载放在 engine 构建前完成，让首次搜索即可返回已有 Folder 结果。
+
+目标流程：
 
 ```text
-app-index
-folder-index
+ServiceStartup
+    -> core.OpenStore(dataPath)
+       -> ensure usage bucket
+       -> ensure folder-sources bucket
+    -> open index cache directory
+    -> load plugin manager
+    -> load app-index cache file
+    -> load folder sources from bbolt
+    -> load folder-index cache file
+    -> apps.NewProviderWithCache(platform.AppSource, appIndexEntries)
+    -> folders.NewProvider(folderIndexEntries)
+    -> core.NewEngine([calc, apps, folders, plugins, web], store, DefaultLimit)
+    -> go appsProvider.Warmup()
+       -> rescan apps
+       -> rewrite cache/app-index.json atomically
+       -> replace apps provider cache
+    -> go folderProvider.RefreshEnabledSources()
+       -> optional startup refresh, non-blocking
+    -> initialize snippets service and text expander
 ```
 
-第一阶段建议逻辑上拆开。
+改造后的搜索 index 有三层数据：
 
----
+- `app-index`：App 扫描缓存，决定启动后 App 结果能否立即出现。
+- `folder-sources`：用户配置，决定扫描哪些 root、depth 和启用状态。
+- `folder-index`：扫描结果，决定搜索时可命中的目录列表。
 
-## 12.1 Folder 持久化字段
+启动时必须先加载持久化 index，再进行后台刷新；App 路径与 Folder 路径的完整时序图见 [index.md](./index.md) §4.1。这个顺序的目的：应用启动后无需等待扫描即可搜索上次缓存的结果；大目录扫描不阻塞热键、窗口、插件加载；后台刷新完成后下一次搜索自然看到新索引；扫描失败只影响对应 source，不影响已有缓存结果和其它 provider。
 
-最低需要：
+### 10.3 新增 / 刷新 Source 的建索引流程
+
+添加 source 时同步执行一次受控扫描，保证添加后立刻可搜索；启用时先从缓存恢复 provider 条目再后台刷新；禁用只移除 provider 条目、保留缓存（快速 re-enable）；刷新 disabled source 返回显式错误。Add / Refresh / Remove / Enable-Disable 四条更新链的完整步骤与顺序约定（先 cache 后 provider）见 [index.md](./index.md) §4.3。
+
+### 10.4 启动刷新策略
+
+首版策略：启动时同步打开 store、加载插件 manifest 与两个缓存文件；App 与 enabled folder sources 均在后台扫描替换缓存，不阻塞 service ready；每个 source 独立失败，错误记录在 source 状态或日志；搜索路径只读 provider 内存 cache，不在输入时扫描磁盘。触发时机总表见 [index.md](./index.md) §3。
+
+未来索引更新策略（index updater、定时器 / 文件变化回调触发、增量扫描）见 [index.md](./index.md) §7。
+
+## 11. Engine 语义
+
+当前 engine 不做跨 provider 去重。本次升级应在每个 provider 内完成打分和排序后、追加到最终结果前增加去重。
+
+去重规则：
+
+- 主 key 为 `SearchResult.ID`。
+- 相同 ID 下，先出现的 provider 获胜，因为 provider 顺序就是优先级顺序。
+- 本次升级不把 plugin row 合并进一等 Core row。
+- 除非产品要求变化，limit 继续使用 `DefaultLimit = 9`。
+
+排序保持 provider 内排序：
 
 ```text
-id
-name
-path
-source_id
-updated_at
+provider fuzzy score + frecency boost
+tie-break by Title ascending
 ```
 
-例如：
+本次升级明确不做跨 provider 的全局分数合并，因为这会改变当前 Web tail fallback 语义。
 
-```json
-{
-  "id": "folder:/Users/user/Code/kyvro",
-  "name": "kyvro",
-  "path": "/Users/user/Code/kyvro",
-  "source_id": "folder-source:code",
-  "updated_at": 1787731200
-}
-```
+## 12. Service API
 
----
+当前绑定方法：
 
-## 12.2 App 是否持久化
+- `Search(query string) ([]core.SearchResult, error)`
+- `Launch(id string) error`
+- `RunAction(id string) ([]core.SearchResult, error)`
 
-App 可以：
+目标新增：
 
-```text
-启动扫描
-→ 建立内存索引
-```
+- 给 settings UI 使用的 Folder source 管理方法。
+- 通用 Action 执行入口。
 
-如果应用数量较少，第一阶段不一定必须持久化。
-
-后续为了优化启动速度，可以：
-
-```text
-读取缓存
-→ 立即可搜索
-→ 后台重新扫描
-→ 更新缓存
-```
-
----
-
-# 13. Folder 索引刷新
-
-第一阶段可以简单实现：
-
-```text
-添加 Root
-    ↓
-立即扫描
-    ↓
-写入 FolderIndex
-
-删除 Root
-    ↓
-删除该 source 对应索引
-
-应用启动
-    ↓
-加载本地 FolderIndex
-```
-
-后续可以增加：
-
-```text
-fs.watch
-定时刷新
-手动 Refresh
-增量扫描
-```
-
-第一阶段无需做复杂文件监听。
-
----
-
-# 14. Search Engine
-
-Search Engine 不关注具体对象。
-
-统一接口：
+建议 service 方法：
 
 ```go
-type Provider interface {
-    Search(ctx context.Context, query string) ([]SearchResult, error)
+func (s *SearchService) FolderSources() ([]core.FolderSource, error)
+func (s *SearchService) AddFolderSource(path string, maxDepth int) (core.FolderSource, error)
+func (s *SearchService) RemoveFolderSource(id string) error
+func (s *SearchService) SetFolderSourceEnabled(id string, enabled bool) error
+func (s *SearchService) RefreshFolderSource(id string) error
+func (s *SearchService) Execute(id string, actionID string) ([]core.SearchResult, error)
+```
+
+Settings 页如果需要原生目录选择器，可额外提供：
+
+```go
+func (s *SearchService) PickFolderSourcePath() (string, error)
+```
+
+该方法只负责打开系统目录选择器并返回路径，不写入配置、不触发扫描。实际添加仍通过 `AddFolderSource(path, maxDepth)` 完成，便于测试和手动输入路径复用同一条逻辑。
+
+`Launch(id)` 可以继续作为执行 primary action 的兼容 wrapper。`RunAction(id)` 可以在前端迁移完成前继续承载插件二级视图。
+
+插件结果在本次升级中暂时只接入 `PrimaryAction`。当前插件转换逻辑只保留第一个合法 action 作为 primary，本次不扩展插件 API 的多 action 语义。`Actions []ActionItem` 先服务 Core 一等结果，例如 Folder；后续插件 API 升级时，再允许插件结果填充同一套 `Actions`。
+
+`Execute(id, actionID)` 行为：
+
+- 空 `actionID` 执行 `PrimaryAction`。
+- 非空 `actionID` 按 ID 查找 `Actions`。
+- 插件 callback action 返回二级结果列表。
+- 非插件终态 action 返回 nil / 空列表，UI 隐藏窗口。
+- 成功执行后，对被激活的结果 ID 记录 usage。
+
+## 13. Platform 要求
+
+增加平台抽象，不要在 core 中导入具体 OS 包：
+
+```go
+type PathOpener interface {
+    OpenPath(path string) error
+    RevealPath(path string) error
 }
 ```
 
-第一阶段：
+macOS 实现：
 
-```text
-AppProvider
-FolderProvider
+- `OpenPath`：使用系统默认行为打开路径。
+- `RevealPath`：在 Finder 中 reveal 路径。
+
+未支持平台应返回 `platform.ErrUnsupported`，并保持可编译。
+
+## 14. UI 要求
+
+搜索 UI 要求：
+
+- 继续保持 30ms 输入防抖。
+- 除非产品行为另行调整，空查询继续不展示列表。
+- Folder row 使用明确的文件夹图标或 monogram fallback。
+- Enter 执行 primary action。
+- 存在 `reveal` action 时，`cmd+enter` 执行 reveal。
+- 存在 `copy-path` action 时，`cmd+c` 执行 copy path。
+- 第一版 Folder release 可以不做 action menu，但结果模型必须支持。
+
+Settings UI 要求：
+
+- 左侧导航新增 `Folders` 栏，和现有 `General` / `Plugins` / `About` 同级。
+- `Folders` 栏用于管理 Folder sources，不混入插件管理页。
+- 顶部提供添加 source 的控件：`Choose Folder...` 使用原生目录选择器；也允许手动输入路径，便于粘贴 `~/Code` 这类路径。
+- 添加表单包含 `MaxDepth` 数字输入，默认值为 `1`，最小值为 `1`。非法值在前端阻止提交，后端仍做校验。
+- 点击 Add 后调用 `AddFolderSource(path, maxDepth)`；添加成功后立即显示该 source，并展示扫描中 / 已索引数量 / 错误状态。
+- Source 列表展示：路径、enabled 状态、`MaxDepth`、索引目录数量、最近扫描时间、最近错误。
+- 每行支持启用 / 禁用。禁用只从搜索结果中移除，不删除配置和 cache entries；重新启用后先恢复已有 cache，再按策略后台刷新。
+- 每行支持 Refresh，调用 `RefreshFolderSource(id)`，只刷新该 source。
+- 每行支持 Remove，删除 source 配置并从 `cache/folder-index.json` 移除该 source 的 entries。
+- 页面提供 Refresh All，刷新所有 enabled sources。
+- 扫描错误展示在对应 source 行内，不应导致 settings 页整体失败或全局搜索失败。
+- 搜索主窗口不提供 Folder source 配置入口；配置只在 Settings 的 `Folders` 栏完成。
+
+## 15. 测试要求
+
+必需单元测试：
+
+- 当前启动流程不在 `ServiceStartup` 前打开 bbolt store。
+- App startup load 从 `cache/app-index.json` 填充 provider cache，不依赖即时扫描。
+- Folder startup load 从 `cache/folder-index.json` 填充 provider cache，不依赖即时扫描。
+- App background rescan 成功后原子替换 `cache/app-index.json` 和 provider cache。
+- Folder startup background refresh 失败不清空已有 cache。
+- Folder provider 只匹配 basename，不匹配完整路径。
+- `core.Store` folder source CRUD。
+- Index cache load/save、损坏 JSON 降级、原子替换。
+- Folder source index replacement 会重写 `cache/folder-index.json` 并更新 provider cache。
+- App / Folder provider 使用预构建 `SearchIndex.Keys`，搜索路径不重新构造 names/search keys。
+- Folder scanner depth 行为。
+- Folder scanner exclusion 行为。
+- Folder provider fuzzy search 和 empty-query 行为。
+- Folder provider result actions。
+- Engine 按 ID 去重，且先出现的 provider 获胜。
+- 插入 folders 后，Engine 仍保持 Web fallback 在最后。
+- Service execution 正确分发 `ActionOpenPath`、`ActionRevealPath` 和 `ActionCopyText`。
+- 未支持平台 stub 保持可编译。
+
+Settings UI 验收：
+
+- Settings 左侧出现 `Folders` 导航项。
+- 可以通过目录选择器或手动路径添加 source。
+- 添加 source 后列表立即更新，并触发扫描 / cache 更新。
+- 启用、禁用、刷新、删除 source 后，搜索结果和 `cache/folder-index.json` 状态一致。
+- 单个 source 扫描失败时，只在该行显示错误，不影响其它 source 和搜索。
+
+必需命令检查：
+
+```sh
+go test ./internal/...
+GOOS=linux go build ./...
 ```
 
-调用方式：
-
-```text
-SearchService
-    ↓
-并行执行 Provider
-    ↓
-合并结果
-```
-
----
-
-## 14.1 Provider 顺序
-
-建议第一阶段：
-
-```text
-apps
-folders
-plugins
-```
-
-实际排序不应完全由 Provider 顺序决定。
-
-最终应该基于 Score 合并。
-
----
-
-# 15. 搜索匹配
-
-第一阶段推荐支持：
-
-```text
-exact match
-prefix match
-fuzzy match
-```
-
-例如：
-
-```text
-Visual Studio Code
-```
-
-搜索：
-
-```text
-code
-visual
-vsc
-```
-
-可以匹配。
-
-Folder：
-
-```text
-charityx-service
-```
-
-搜索：
-
-```text
-char
-service
-cxs
-```
-
-具体 fuzzy 算法可以后续调整，但 Provider 返回统一 Score。
-
----
-
-# 16. 使用历史
-
-用户打开结果后记录：
-
-```text
-result_id
-usage_count
-last_used_at
-```
-
-例如：
-
-```text
-folder:/Users/user/Code/kyvro
-```
-
-之后搜索：
-
-```text
-ky
-```
-
-可以根据历史提高排名。
-
-排序大致：
-
-```text
-Search Match Score
-+
-Usage Boost
-+
-Recency Boost
-```
-
-这部分适用于所有 ResultKind。
-
----
-
-# 17. 默认操作与插件扩展
-
-当前 Core 产生基础 Result。
-
-例如：
-
-```text
-Kyvro
-~/Code/kyvro
-```
-
-Core Actions：
-
-```text
-Open
-Reveal in Finder
-Copy Path
-```
-
-未来插件可以对已有搜索结果追加 Action。
-
-例如 Projects Plugin：
-
-```text
-Open in VS Code
-Open in Cursor
-Open Terminal
-```
-
-Git Plugin：
-
-```text
-Git Status
-Git Log
-Branches
-```
-
-AI Plugin：
-
-```text
-Explain Project
-Review Changes
-```
-
-最终：
-
-```text
-Core Result
-    │
-    ▼
-Action Extensions
-    │
-    ├── Projects Plugin
-    ├── Git Plugin
-    └── AI Plugin
-    │
-    ▼
-Final SearchResult
-```
-
----
-
-# 18. 插件 Action Extension
-
-未来插件 API 可以支持：
-
-```javascript
-ctx.actions.register({
-  kind: "folder",
-
-  actions: (result) => [
-    {
-      id: "projects.open-vscode",
-      title: "Open in VS Code",
-      action: {
-        kind: "open-with-app",
-        args: {
-          app: "com.microsoft.VSCode",
-          path: result.data.path
-        }
-      }
-    }
-  ]
-});
-```
-
-这里只按：
-
-```text
-ResultKind
-```
-
-匹配。
-
-第一阶段不引入：
-
-```text
-Capability
-Trait
-Entity Type
-```
-
-等后续需求明确后再扩展。
-
----
-
-# 19. 插件扩展 App
-
-未来 App 插件也可以增加行为：
-
-```javascript
-ctx.actions.register({
-  kind: "app",
-
-  actions: (result) => [
-    {
-      id: "app.reveal",
-      title: "Reveal in Finder"
-    },
-    {
-      id: "app.quit",
-      title: "Quit App"
-    }
-  ]
-});
-```
-
----
-
-# 20. URL / Command / Text 预留设计
-
-当前只定义 Kind，不实现 Provider。
-
----
-
-## 20.1 KindURL
-
-未来可能来源：
-
-```text
-Bookmark Plugin
-GitHub Plugin
-Web Search
-Browser History
-Documentation Search
-```
-
-默认行为：
-
-```text
-Enter
-→ Open URL
-```
-
-未来 Action：
-
-```text
-Copy URL
-Open in Chrome
-Open in Safari
-Open Private Window
-Generate QR Code
-```
-
----
-
-## 20.2 KindCommand
-
-未来可能来源：
-
-```text
-Plugin Commands
-System Commands
-Developer Tools
-Workflow Commands
-```
-
-示例：
-
-```text
-Generate UUID
-Lock Screen
-Clear Clipboard
-Restart Docker
-```
-
-默认行为：
-
-```text
-Enter
-→ Execute PrimaryAction
-```
-
----
-
-## 20.3 KindText
-
-未来可能来源：
-
-```text
-Calculator
-Text Transform
-Base64
-UUID
-Timestamp
-AI
-Snippet
-```
-
-示例：
-
-```text
-Input:
-uuid
-
-Result:
-550e8400-e29b-41d4-a716-446655440000
-```
-
-默认行为可考虑：
-
-```text
-Enter
-→ Copy Text
-```
-
-具体行为由 Result 自己的 PrimaryAction 决定，不要求所有 `KindText` 完全相同。
-
----
-
-# 21. 第一阶段范围
-
-## 必须实现
-
-### Search Core
-
-- `SearchService`
-- `Search Engine`
-- Provider 接口
-- Result 合并
-- 基础排序
-- 使用历史 Boost
-
-### Result
-
-- `ResultKind`
-- `SearchResult`
-- `Action`
-- `ActionItem`
-- `ActionExecutor`
-
-### App
-
-- macOS App 扫描
-- AppIndex
-- AppProvider
-- Launch App
-
-### Folder
-
-- Folder Root 配置
-- Folder Scanner
-- FolderIndex 持久化
-- FolderProvider
-- Open Folder
-- Reveal in Finder
-- Copy Path
-
----
-
-## 暂不实现
-
-- Capability
-- Project 类型
-- 文件全文索引
-- 全盘文件搜索
-- Git 状态
-- VS Code / Cursor 集成
-- URL Provider
-- Command Provider
-- Text Provider
-- Background Index Watcher
-- 插件动态追加 Action
-- `open-with-app`
-- 自定义快捷键
-
-但数据模型应避免阻碍这些能力未来加入。
-
----
-
-# 22. 推荐目录结构
-
-```text
-internal/
-├── search/
-│   ├── engine.go
-│   ├── result.go
-│   ├── provider.go
-│   ├── ranking.go
-│   └── history.go
-│
-├── action/
-│   ├── action.go
-│   └── executor.go
-│
-├── appindex/
-│   ├── scanner.go
-│   ├── index.go
-│   └── provider.go
-│
-├── folderindex/
-│   ├── source.go
-│   ├── scanner.go
-│   ├── index.go
-│   └── provider.go
-│
-└── plugin/
-    └── ...
-```
-
-如果现有项目已经有：
-
-```text
-internal/core/Engine
-```
-
-也可以保持：
-
-```text
-service/SearchService
-    ↓
-internal/core/Engine
-    ├── AppProvider
-    ├── FolderProvider
-    └── PluginProvider
-```
-
-不要求为了本 Spec 大规模调整现有目录。
-
----
-
-# 23. 第一阶段完整数据流
-
-```text
-                    Kyvro Startup
-                         │
-             ┌───────────┴───────────┐
-             ▼                       ▼
-        Scan Applications       Load FolderIndex
-             │                       │
-             ▼                       ▼
-          AppIndex              FolderIndex
-             │                       │
-             └───────────┬───────────┘
-                         │
-                         ▼
-
-User Input
-    │
-    ▼
-SearchService
-    │
-    ▼
-Search Engine
-    │
-    ├──────────────┐
-    ▼              ▼
-AppProvider   FolderProvider
-    │              │
-    └──────┬───────┘
-           ▼
-      Merge + Rank
-           │
-           ▼
-      SearchResult[]
-           │
-           ▼
-            UI
-     ┌─────┼────────┐
-     ▼     ▼        ▼
-   Enter Shortcut  Menu
-     │     │        │
-     └─────┴────────┘
-           ▼
-     ActionExecutor
-           │
-     ┌─────┴──────────┐
-     ▼                ▼
-Launch App        Open Folder
-```
-
----
-
-# 24. 未来演进
-
-Phase 1：
-
-```text
-App
-Folder
-Search
-Action
-```
-
-Phase 2：
-
-```text
-Plugin Action Extension
-URL
-Command
-Text
-open-with-app
-```
-
-Phase 3：
-
-```text
-Projects Plugin
-Git Plugin
-Clipboard Plugin
-Browser Plugin
-```
-
-Phase 4：
-
-根据实际插件需求再决定是否引入：
-
-```text
-Capability
-Result Metadata Schema
-Event Bus
-Background Tasks
-UI DSL
-```
-
----
-
-# 25. 核心边界总结
-
-Kyvro Search Core 的核心职责：
-
-> 找到对象，并描述用户当前可以对这个对象执行什么操作。
-
-第一阶段：
-
-```text
-App
-→ 自动扫描
-→ 搜索
-→ 启动
-
-Folder
-→ 用户配置 Root
-→ 扫描
-→ 写入索引
-→ 搜索
-→ 打开
-```
-
-未来：
-
-```text
-Core SearchResult
-        │
-        ▼
-Plugin Action Extension
-        │
-        ├── Open in VS Code
-        ├── Git Status
-        ├── Open GitHub
-        ├── Run AI Review
-        └── ...
-```
-
-因此当前不需要把“项目管理”做进 Search Core。
-
-Search Core 只需要把项目目录当作：
-
-```text
-KindFolder
-```
-
-快速找到并打开。
-
-更丰富的项目语义和操作由未来插件继续扩展。
+如果 `frontend/dist` 尚不存在，Linux build 仍可能因为 embed 前置条件失败；但 platform layer 的编译错误不可接受。
+
+## 16. 迁移计划
+
+1. 在 `internal/core` 增加 model 字段和 action kinds。
+2. 增加 folder sources 的 store 支持，以及 app/folder index cache 文件读写组件。
+3. 增加 folder scanner / provider 及测试。
+4. 将 provider 顺序接线为 `calc, apps, folders, plugins, web`。
+5. 在 `ServiceStartup` 中加载 `cache/app-index.json` / `cache/folder-index.json`，并后台刷新 apps / enabled folder sources。
+6. 增加 path open / reveal platform interface 和 service execution。
+7. 绑定 model / service 变化后重新生成 Wails bindings。
+8. 更新前端激活逻辑，使用 primary / secondary actions。
+9. 在 settings UI 增加 Folder sources 管理。
+10. 实现落地后更新 `docs/features.md`。
+
+## 17. 已定设计决策
+
+- App result ID 直接使用 `app:<bundleID>`；缺 bundle ID 时使用 `app:path:<absolute-app-path>`。
+- Folder 第一版只匹配 basename，不匹配完整路径。
+- App / Folder index 放入独立 cache JSON 文件，不进入 bbolt。
+- 当前阶段 App / Folder 每次启动都后台扫描；未来抽成独立 index updater，由定时器或系统 / 文件变化回调触发。
+- `ActionItem.Shortcut` 第一版使用 `cmd+enter` 这类字符串。
+- 插件结果本次只接入 `PrimaryAction`；`Actions []ActionItem` 先用于 Core 一等结果，后续插件 API 再扩展多 action。

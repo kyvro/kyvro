@@ -33,9 +33,10 @@ func (p *Provider) Search(_ context.Context, query string) []core.SearchResult {
 	}
 	return []core.SearchResult{{
 		ID:       "calc:" + expr,
+		Kind:     core.KindText,
 		Title:    "= " + value,
 		Subtitle: expr + " · 回车复制结果",
-		Action: core.Action{
+		PrimaryAction: core.Action{
 			Kind: core.ActionCopyText,
 			Arg:  value,
 		},

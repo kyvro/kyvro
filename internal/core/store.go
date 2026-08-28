@@ -2,9 +2,11 @@ package core
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -15,6 +17,10 @@ import (
 //	key   = result ID (string)
 //	value = 16 bytes: int64 count + int64 lastUsed unix nano
 var bucketUsage = []byte("usage")
+
+// bucketFolderSources stores FolderSource configs as JSON, keyed by source
+// ID. This is user state (not rebuildable), so it lives in bbolt.
+var bucketFolderSources = []byte("folder-sources")
 
 // Usage is the persisted launch history of a single result ID.
 type Usage struct {
@@ -37,8 +43,12 @@ func OpenStore(path string) (*Store, error) {
 		return nil, fmt.Errorf("open bbolt: %w", err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists(bucketUsage)
-		return err
+		for _, b := range [][]byte{bucketUsage, bucketFolderSources} {
+			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		db.Close()
@@ -180,5 +190,66 @@ func (s *Store) DeleteNS(ns, key string) error {
 			return nil
 		}
 		return b.Delete([]byte(key))
+	})
+}
+
+// PutFolderSource persists src keyed by its ID.
+func (s *Store) PutFolderSource(src FolderSource) error {
+	v, err := json.Marshal(src)
+	if err != nil {
+		return fmt.Errorf("encode folder source: %w", err)
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketFolderSources).Put([]byte(src.ID), v)
+	})
+}
+
+// GetFolderSource returns the source with the given ID.
+func (s *Store) GetFolderSource(id string) (FolderSource, error) {
+	var src FolderSource
+	err := s.db.View(func(tx *bolt.Tx) error {
+		v := tx.Bucket(bucketFolderSources).Get([]byte(id))
+		if v == nil {
+			return fmt.Errorf("folder source %q not found", id)
+		}
+		if err := json.Unmarshal(v, &src); err != nil {
+			return fmt.Errorf("decode folder source %q: %w", id, err)
+		}
+		return nil
+	})
+	return src, err
+}
+
+// ListFolderSources returns every source ordered by CreatedAt then ID for
+// stable settings rendering.
+func (s *Store) ListFolderSources() ([]FolderSource, error) {
+	var out []FolderSource
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketFolderSources).ForEach(func(k, v []byte) error {
+			var src FolderSource
+			if err := json.Unmarshal(v, &src); err != nil {
+				return fmt.Errorf("decode folder source %q: %w", k, err)
+			}
+			out = append(out, src)
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out, nil
+}
+
+// DeleteFolderSource removes the source with the given ID (no-op when
+// absent).
+func (s *Store) DeleteFolderSource(id string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketFolderSources).Delete([]byte(id))
 	})
 }

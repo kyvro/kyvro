@@ -10,8 +10,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/jackmordaunt/icns"
+	"github.com/jackmordaunt/icns/v2"
 	"github.com/wailsapp/wails/v3/pkg/application"
+
+	"kyvro/internal/platform"
 )
 
 // iconCacheControl lets the webview cache icons for a day so repeated
@@ -92,8 +94,17 @@ func serveIcon(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, f)
 }
 
-// iconPNG decodes an .icns file (largest embedded representation) and
-// re-encodes it as PNG, memoising the result.
+// appKitDecodePNG rasterises image files via AppKit; var-injected so tests
+// never touch AppKit. On darwin this rescues .icns files whose payloads the
+// pure-Go decoder cannot read — most notably JPEG2000 renditions (some
+// Electron apps ship single ic09 JP2 icons), which NSImage decodes natively.
+var appKitDecodePNG = platform.DecodeImageFilePNG // func(path string, size int)
+
+// iconPNG converts an .icns file to PNG bytes (largest embedded
+// representation), memoising the result. The pure-Go icns decoder runs
+// first; when it fails (e.g. JPEG2000-only files report "no icons found")
+// AppKit decodes the file as a fallback. Any residual failure is an error
+// and the frontend falls back to its monogram.
 func iconPNG(path string) ([]byte, error) {
 	iconPNGCache.mu.Lock()
 	if iconPNGCache.data == nil {
@@ -105,27 +116,38 @@ func iconPNG(path string) ([]byte, error) {
 	}
 	iconPNGCache.mu.Unlock()
 
+	b, err := decodeIconPNG(path)
+
+	iconPNGCache.mu.Lock()
+	if err == nil && b != nil {
+		if iconPNGCache.bytes+len(b) > iconCacheMaxBytes {
+			iconPNGCache.data = make(map[string][]byte)
+			iconPNGCache.bytes = 0
+		}
+		iconPNGCache.data[path] = b
+		iconPNGCache.bytes += len(b)
+	}
+	iconPNGCache.mu.Unlock()
+	return b, err
+}
+
+// decodeIconPNG produces PNG bytes for the icns at path via the pure-Go
+// decoder or, failing that, the AppKit fallback.
+func decodeIconPNG(path string) ([]byte, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
+	// v1 of this library loses parse alignment on icns files that begin with
+	// legacy elements (s8mk/is32 masks) and wrongly reports "no icons found";
+	// /v2 skips unknown element types correctly.
 	img, err := icns.Decode(bytes.NewReader(raw))
 	if err != nil {
-		return nil, err
+		return appKitDecodePNG(path, 0) // 0 = shared renderedIconSize
 	}
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
 		return nil, err
 	}
-	b := buf.Bytes()
-
-	iconPNGCache.mu.Lock()
-	if iconPNGCache.bytes+len(b) > iconCacheMaxBytes {
-		iconPNGCache.data = make(map[string][]byte)
-		iconPNGCache.bytes = 0
-	}
-	iconPNGCache.data[path] = b
-	iconPNGCache.bytes += len(b)
-	iconPNGCache.mu.Unlock()
-	return b, nil
+	return buf.Bytes(), nil
 }

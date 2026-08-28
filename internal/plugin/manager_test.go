@@ -237,7 +237,7 @@ func TestExamplePluginIsValid(t *testing.T) {
 	cmds := m.Provider().Search(context.Background(), "url")
 	found := false
 	for _, r := range cmds {
-		if r.Action.Kind == core.ActionPlugin && r.Action.ActionID == "encode.url" {
+		if r.PrimaryAction.Kind == core.ActionPlugin && r.PrimaryAction.ActionID == "encode.url" {
 			found = true
 		}
 	}
@@ -265,9 +265,9 @@ func TestOfficialGhPluginIsValid(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("want exactly the search row, got %+v", results)
 	}
-	if results[0].Action.Kind != core.ActionOpenURL ||
-		!strings.Contains(results[0].Action.Arg, "github.com/search?q=wails") {
-		t.Fatalf("search row action = %+v", results[0].Action)
+	if results[0].PrimaryAction.Kind != core.ActionOpenURL ||
+		!strings.Contains(results[0].PrimaryAction.Arg, "github.com/search?q=wails") {
+		t.Fatalf("search row action = %+v", results[0].PrimaryAction)
 	}
 	// The manifest icon must be attached to rows and the management list.
 	if !strings.HasSuffix(results[0].IconPath, "icon.svg") {
@@ -284,9 +284,9 @@ func TestOfficialGhPluginIsValid(t *testing.T) {
 	if len(results) != 2 {
 		t.Fatalf("want repo+search rows, got %+v", results)
 	}
-	if results[0].Action.Kind != core.ActionOpenURL ||
-		results[0].Action.Arg != "https://github.com/wailsapp/wails" {
-		t.Fatalf("repo row action = %+v", results[0].Action)
+	if results[0].PrimaryAction.Kind != core.ActionOpenURL ||
+		results[0].PrimaryAction.Arg != "https://github.com/wailsapp/wails" {
+		t.Fatalf("repo row action = %+v", results[0].PrimaryAction)
 	}
 
 	// Ordinary gh-prefixed words must fall through to the apps provider.

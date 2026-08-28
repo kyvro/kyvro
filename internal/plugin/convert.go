@@ -60,12 +60,12 @@ func convertResult(pluginID, iconPath string, obj map[string]any) (core.SearchRe
 	}
 	subtitle, _ := obj["subtitle"].(string)
 	return core.SearchResult{
-		ID:       "plugin:" + pluginID + ":" + id,
-		Title:    title,
-		Subtitle: subtitle,
-		Action:   action,
-		Score:    clampScore(obj["scoreHint"]),
-		IconPath: iconPath,
+		ID:            "plugin:" + pluginID + ":" + id,
+		Title:         title,
+		Subtitle:      subtitle,
+		PrimaryAction: action,
+		Score:         clampScore(obj["scoreHint"]),
+		IconPath:      iconPath,
 	}, true
 }
 
@@ -150,7 +150,7 @@ func commandResult(m *Manifest, cmd Command, query string, score float64, iconPa
 		ID:       fmt.Sprintf("plugin:%s:cmd:%s", m.ID, cmd.ID),
 		Title:    cmd.Title,
 		Subtitle: subtitle,
-		Action: core.Action{
+		PrimaryAction: core.Action{
 			Kind:     core.ActionPlugin,
 			PluginID: m.ID,
 			ActionID: cmd.ID,

@@ -23,25 +23,25 @@ func (f *fakeSource) Rescan() error {
 }
 
 var testApps = []core.AppEntry{
-	{ID: "com.apple.Safari", Name: "Safari", Path: "/Applications/Safari.app"},
-	{ID: "com.apple.Notes", Name: "Notes", Path: "/System/Applications/Notes.app"},
-	{ID: "com.google.Chrome", Name: "Google Chrome", Path: "/Applications/Google Chrome.app"},
+	{BundleID: "com.apple.Safari", Name: "Safari", Path: "/Applications/Safari.app"},
+	{BundleID: "com.apple.Notes", Name: "Notes", Path: "/System/Applications/Notes.app"},
+	{BundleID: "com.google.Chrome", Name: "Google Chrome", Path: "/Applications/Google Chrome.app"},
 }
 
 func TestSearchFuzzyMatch(t *testing.T) {
 	p := New(&fakeSource{apps: testApps})
 
 	got := p.Search(context.Background(), "safa")
-	if len(got) != 1 || got[0].ID != "com.apple.Safari" {
+	if len(got) != 1 || got[0].ID != "app:com.apple.Safari" {
 		t.Fatalf("safa should match Safari only, got %+v", got)
 	}
-	if got[0].Action.Kind != core.ActionLaunchApp || got[0].Action.Arg != "/Applications/Safari.app" {
-		t.Fatalf("bad action: %+v", got[0].Action)
+	if got[0].PrimaryAction.Kind != core.ActionLaunchApp || got[0].PrimaryAction.Arg != "/Applications/Safari.app" {
+		t.Fatalf("bad action: %+v", got[0].PrimaryAction)
 	}
 
 	// Case-insensitive substring letters across words.
 	got = p.Search(context.Background(), "gc")
-	if len(got) != 1 || got[0].ID != "com.google.Chrome" {
+	if len(got) != 1 || got[0].ID != "app:com.google.Chrome" {
 		t.Fatalf("gc should match Google Chrome, got %+v", got)
 	}
 
@@ -66,9 +66,9 @@ func TestSearchPassesIconThrough(t *testing.T) {
 
 func TestSearchPinyinAndAltNames(t *testing.T) {
 	src := &fakeSource{apps: []core.AppEntry{
-		{ID: "com.alibaba.DingTalk", Name: "钉钉", Path: "/Applications/DingTalk.app", AltNames: []string{"DingTalk"}},
-		{ID: "com.baidu.netdisk", Name: "百度网盘", Path: "/Applications/BaiduNetdisk_mac.app", AltNames: []string{"BaiduNetdisk_mac"}},
-		{ID: "com.apple.Safari", Name: "Safari", Path: "/Applications/Safari.app"},
+		{BundleID: "com.alibaba.DingTalk", Name: "钉钉", Path: "/Applications/DingTalk.app", AltNames: []string{"DingTalk"}},
+		{BundleID: "com.baidu.netdisk", Name: "百度网盘", Path: "/Applications/BaiduNetdisk_mac.app", AltNames: []string{"BaiduNetdisk_mac"}},
+		{BundleID: "com.apple.Safari", Name: "Safari", Path: "/Applications/Safari.app"},
 	}}
 	p := New(src)
 
@@ -77,16 +77,16 @@ func TestSearchPinyinAndAltNames(t *testing.T) {
 		want  string
 	}{
 		// full pinyin and initial letters match the Han name
-		{"dingding", "com.alibaba.DingTalk"},
-		{"dd", "com.alibaba.DingTalk"},
-		{"baiduwangpan", "com.baidu.netdisk"},
-		{"bdwp", "com.baidu.netdisk"},
+		{"dingding", "app:com.alibaba.DingTalk"},
+		{"dd", "app:com.alibaba.DingTalk"},
+		{"baiduwangpan", "app:com.baidu.netdisk"},
+		{"bdwp", "app:com.baidu.netdisk"},
 		// raw un-localized names still match
-		{"dingtalk", "com.alibaba.DingTalk"},
-		{"BaiduNetdisk_mac", "com.baidu.netdisk"},
-		{"baidunetdisk", "com.baidu.netdisk"},
+		{"dingtalk", "app:com.alibaba.DingTalk"},
+		{"BaiduNetdisk_mac", "app:com.baidu.netdisk"},
+		{"baidunetdisk", "app:com.baidu.netdisk"},
 		// unchanged for pure-ASCII names
-		{"safa", "com.apple.Safari"},
+		{"safa", "app:com.apple.Safari"},
 	}
 	for _, tc := range cases {
 		got := p.Search(context.Background(), tc.query)
@@ -184,5 +184,100 @@ func TestWarmup(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	if src.scans != 1 {
 		t.Fatalf("warmup should mark cache fresh; scans = %d, want 1", src.scans)
+	}
+}
+
+func TestNewWithCacheSeedsWithoutScan(t *testing.T) {
+	src := &fakeSource{apps: testApps}
+	seed := []core.AppIndexEntry{{
+		ID:       "app:com.apple.Safari",
+		Name:     "Safari",
+		Path:     "/Applications/Safari.app",
+		BundleID: "com.apple.Safari",
+	}}
+	p := NewWithCache(src, seed)
+
+	got := p.Search(context.Background(), "safa")
+	if len(got) != 1 || got[0].ID != "app:com.apple.Safari" {
+		t.Fatalf("cache-seeded search = %+v", got)
+	}
+	if got = p.Search(context.Background(), ""); len(got) != 1 {
+		t.Fatalf("empty query = %+v", got)
+	}
+	if src.scans != 0 {
+		t.Fatalf("search over cache must not scan; scans = %d", src.scans)
+	}
+}
+
+func TestRescanSwapsSnapshotAndFiresHook(t *testing.T) {
+	src := &fakeSource{apps: testApps}
+	p := New(src)
+
+	hookCalled := make(chan []core.AppEntry, 1)
+	p.SetCacheHook(func(list []core.AppEntry) { hookCalled <- list })
+
+	updated := []core.AppEntry{
+		{BundleID: "com.apple.Terminal", Name: "Terminal", Path: "/Applications/Utilities/Terminal.app"},
+	}
+	src.apps = updated
+	p.Warmup()
+
+	select {
+	case list := <-hookCalled:
+		if len(list) != 1 || list[0].BundleID != "com.apple.Terminal" {
+			t.Fatalf("hook got %+v", list)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cache hook not called after rescan")
+	}
+
+	got := p.Search(context.Background(), "term")
+	if len(got) != 1 || got[0].ID != "app:com.apple.Terminal" {
+		t.Fatalf("post-rescan search = %+v", got)
+	}
+	if got = p.Search(context.Background(), "safa"); got != nil {
+		t.Fatalf("stale entries must be gone, got %+v", got)
+	}
+}
+
+func TestFailedRescanKeepsSnapshot(t *testing.T) {
+	src := &fakeSource{apps: testApps}
+	p := New(src)
+	p.Warmup()
+
+	src.err = errors.New("disk on fire")
+	src.apps = nil // even an emptied source cache must not clear the snapshot
+	p.mu.Lock()
+	p.lastRescan = time.Now().Add(-2 * rescanInterval)
+	p.mu.Unlock()
+
+	p.Search(context.Background(), "safa")
+	deadline := time.Now().Add(time.Second)
+	for src.scans < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	got := p.Search(context.Background(), "safa")
+	if len(got) != 1 || got[0].ID != "app:com.apple.Safari" {
+		t.Fatalf("failed rescan must keep old snapshot, got %+v", got)
+	}
+}
+
+func TestAppIndexEntriesAndFallbackID(t *testing.T) {
+	list := []core.AppEntry{
+		{BundleID: "com.apple.Safari", Name: "Safari", Path: "/a.app"},
+		{Name: "NoBundle", Path: "/b/NoBundle.app"},
+	}
+	entries := AppIndexEntries(list)
+	if entries[0].ID != "app:com.apple.Safari" {
+		t.Fatalf("bundle ID entry = %q", entries[0].ID)
+	}
+	if entries[1].ID != "app:path:/b/NoBundle.app" {
+		t.Fatalf("fallback entry = %q", entries[1].ID)
+	}
+	if len(entries[0].SearchKeys) == 0 || entries[0].SearchKeys[0] != "Safari" {
+		t.Fatalf("search keys = %+v", entries[0].SearchKeys)
+	}
+	if entries[0].Path != "/a.app" || entries[0].Name != "Safari" {
+		t.Fatalf("entry = %+v", entries[0])
 	}
 }
