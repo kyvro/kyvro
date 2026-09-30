@@ -1,5 +1,4 @@
 import type {
-  ActivationEvent,
   ManifestCommand,
   Permission,
   Platform,
@@ -18,25 +17,18 @@ const manifest: PluginManifest = {
   main: "index.js",
   minHostVersion: "0.1.0",
   platforms: ["darwin"],
-  activationEvents: ["onStartup", "onSearchPrefix:demo", "onCommand:say-hi"],
   permissions: ["storage"],
-  commands: [{ id: "say-hi", title: "Say Hi", keywords: ["hello"] }]
+  commands: [{ id: "say-hi", title: "Say Hi", prefix: "demo" }]
 };
 
-// Template-literal union assignability.
-const events: ActivationEvent[] = [
-  "onStartup",
-  "onSearchPrefix:demo",
-  "onCommand:say-hi"
+// Prefix is required on commands; title optional (defaults to id).
+const commands: ManifestCommand[] = [
+  { id: "say-hi", title: "Say Hi", prefix: "demo" },
+  { id: "ping", prefix: "PING" } // matched case-insensitively
 ];
+
 const permissions: Permission[] = ["storage", "network:request"];
 const goosList: Platform[] = ["darwin"];
-
-// Commands surfaced without JS; title optional (defaults to id).
-const commands: ManifestCommand[] = [
-  { id: "say-hi", title: "Say Hi", subtitle: "Greets", keywords: ["hello"] },
-  { id: "ping" }
-];
 
 // Non-empty tuple requirement mirrors convert.go: rows need >=1 action and
 // the FIRST one becomes primary.
@@ -54,15 +46,9 @@ const row: ResultRow = {
 };
 
 const plugin: Plugin = {
-  provider: {
-    // Full query including the trigger prefix arrives as-is.
-    search(query) {
-      return query.length > 0 ? [row] : [];
-    }
-  },
-
-  // Callback actions re-enter here; activated commands forward the whole
-  // query as args[0].
+  // Single business entry. Live prefix hits arrive on every keystroke with
+  // the FULL query (prefix included) as args[0]; callback actions arrive
+  // once with the action's own args.
   onAction(actionId, args) {
     return [
       {
@@ -79,10 +65,6 @@ const plugin: Plugin = {
       ctx.storage.set("runs", "1");
     }
     ctx.log.info("activated", manifest.version);
-    ctx.template.registerFunc(
-      "upper",
-      (...parts) => parts.join("").toUpperCase()
-    );
   }
 };
 
@@ -101,7 +83,6 @@ function featureDetect(ctx: PluginContext): void {
 export {
   manifest,
   commands,
-  events,
   permissions,
   goosList,
   plugin,

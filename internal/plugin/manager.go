@@ -2,11 +2,11 @@ package plugin
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,12 +34,14 @@ type Manager struct {
 
 	mu      sync.RWMutex
 	plugins map[string]*loadedPlugin
+	cmds    commandIndex // prefix command index over enabled plugins
 }
 
 type loadedPlugin struct {
 	manifest *Manifest
 	rt       *jsRuntime
 	disabled bool
+	source   string // install source: SourceMarket or SourceLocal
 }
 
 // PluginStatus represents the installation and enablement state of a plugin.
@@ -47,11 +49,11 @@ type PluginStatus string
 
 const (
 	StatusNotInstalled PluginStatus = "not_installed" // Available in registry but not installed
-	StatusInstalled    PluginStatus = "installed"    // Installed but disabled
-	StatusEnabled      PluginStatus = "enabled"      // Installed and enabled
+	StatusInstalled    PluginStatus = "installed"     // Installed but disabled
+	StatusEnabled      PluginStatus = "enabled"       // Installed and enabled
 )
 
-// PluginInfo describes a plugin for the settings UI, combining local and remote metadata.
+// PluginInfo describes an installed plugin for the settings UI.
 type PluginInfo struct {
 	ID           string
 	Name         string
@@ -60,13 +62,10 @@ type PluginInfo struct {
 	Permissions  []string
 	Author       Author
 	IconPath     string // absolute manifest-icon path ("" when none)
-	IconURL      string // remote icon URL for registry plugins
 	Disabled     bool   // user- or auto-disabled
 	AutoDisabled bool   // disabled by the 3-strike timeout rule
 	Status       PluginStatus
-	DownloadURL  string // URL for downloading from registry
-	Category     string // Plugin category for marketplace
-	Keywords     []string // Search keywords
+	Source       string // install source: SourceMarket or SourceLocal
 }
 
 // stateNamespace is the bbolt namespace persisting user choices ("disabled"
@@ -87,29 +86,30 @@ func NewManager(root string, store *core.Store, grant GrantDecision) *Manager {
 	}
 }
 
-// LoadAll scans the plugins root and activates every installable plugin.
-// Failures are logged and skipped — one broken plugin never blocks the rest
-// or the host.
+// LoadAll reconciles the manager state with the plugins root: every
+// installable plugin on disk is loaded into a fresh table which then
+// replaces the live one, so plugins removed from disk (uninstall) or whose
+// load now fails (broken re-import) disappear from the manager immediately.
+// Runtimes that were replaced or dropped are shut down outside the lock.
+// Individual plugin failures are logged and skipped — one broken plugin
+// never blocks the rest or the host.
 func (m *Manager) LoadAll() {
-	fmt.Printf("DEBUG: LoadAll called, plugins root: %s\n", m.root)
+	loaded := make(map[string]*loadedPlugin)
 	entries, err := os.ReadDir(m.root)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			log.Printf("plugin: read plugins dir %s: %v", m.root, err)
 		}
-		return
-	}
-	fmt.Printf("DEBUG: Found %d entries in plugins root\n", len(entries))
-	for _, e := range entries {
-		fmt.Printf("DEBUG: Processing entry: %s\n", e.Name())
-		if !e.IsDir() {
-			fmt.Printf("DEBUG: Skipping %s (not a directory)\n", e.Name())
-			continue
-		}
-		if lp, err := m.load(filepath.Join(m.root, e.Name())); err != nil {
-			fmt.Printf("DEBUG: Failed to load plugin %s: %v\n", e.Name(), err)
-			log.Printf("plugin: skip %s: %v", e.Name(), err)
-		} else {
+	} else {
+		for _, e := range entries {
+			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
+			lp, err := m.load(filepath.Join(m.root, e.Name()))
+			if err != nil {
+				log.Printf("plugin: skip %s: %v", e.Name(), err)
+				continue
+			}
 			// Honor a persisted user disable: the runtime stays loaded (so
 			// it can be re-enabled live) but is kept out of rotation.
 			if m.store != nil {
@@ -117,32 +117,102 @@ func (m *Manager) LoadAll() {
 					lp.disabled = true
 				}
 			}
-			m.mu.Lock()
-			m.plugins[lp.manifest.ID] = lp
-			m.mu.Unlock()
+			loaded[lp.manifest.ID] = lp
 			log.Printf("plugin: loaded %s %s", lp.manifest.ID, lp.manifest.Version)
-			fmt.Printf("DEBUG: Successfully loaded plugin: %s %s\n", lp.manifest.ID, lp.manifest.Version)
 		}
 	}
-	fmt.Printf("DEBUG: LoadAll completed, loaded %d plugins\n", len(m.plugins))
+
+	m.mu.Lock()
+	prev := m.plugins
+	m.plugins = loaded
+	m.rebuildCommandsLocked()
+	m.mu.Unlock()
+
+	// Retire runtimes that this pass replaced or dropped. Shutdown is
+	// race-safe (in-flight calls fail with "runtime is shutting down"
+	// instead of hanging) and idempotent.
+	for id, old := range prev {
+		if cur := loaded[id]; cur == nil || cur.rt != old.rt {
+			old.rt.Shutdown()
+		}
+	}
+}
+
+// rebuildCommandsLocked re-derives the prefix command index from the
+// enabled plugins (index.md §4.4): Load / Enable rebuild it; Disable /
+// Uninstall / auto-disable drop the plugin's prefixes. Same-prefix conflicts
+// resolve deterministically to the lowest plugin id, which logs a shadow
+// warning for the loser. Callers must hold m.mu for writing.
+func (m *Manager) rebuildCommandsLocked() {
+	idx := commandIndex{byPrefix: make(map[string]commandRef, len(m.plugins))}
+	ids := make([]string, 0, len(m.plugins))
+	for id := range m.plugins {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		lp := m.plugins[id]
+		if lp.disabled {
+			continue
+		}
+		for _, c := range lp.manifest.Commands {
+			if _, dup := idx.byPrefix[c.Prefix]; dup {
+				log.Printf("plugin: prefix %q already indexed; command %s of %s is shadowed", c.Prefix, c.ID, id)
+				continue
+			}
+			idx.byPrefix[c.Prefix] = commandRef{pluginID: id, commandID: c.ID}
+			if len(c.Prefix) > idx.maxLen {
+				idx.maxLen = len(c.Prefix)
+			}
+		}
+	}
+	m.cmds = idx
+}
+
+// liveSearch routes a prefix hit to the owning plugin's onAction under the
+// live (search) budget; the full query travels as args[0] (plugins.md §3).
+// A miss returns (nil, false) without touching any VM. Timeout strikes feed
+// the 3-strike auto-disable, which also drops the plugin from the index.
+func (m *Manager) liveSearch(ctx context.Context, query string, timeout time.Duration) ([]core.SearchResult, bool) {
+	q := strings.ToLower(query)
+	m.mu.RLock()
+	ref, ok := m.cmds.match(q)
+	var lp *loadedPlugin
+	if ok {
+		lp = m.plugins[ref.pluginID]
+		if lp == nil || lp.disabled {
+			ok = false
+		}
+	}
+	m.mu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+
+	res, err := lp.rt.RunAction(ctx, ref.commandID, []string{query}, timeout)
+	if err != nil {
+		if code, ok := CodeOf(err); !ok || code != ErrTimeout {
+			log.Printf("plugin %s: live search: %v", ref.pluginID, err)
+		}
+		if code, ok := CodeOf(err); ok && code == ErrTimeout && lp.rt.Strikes() >= disableStrikes {
+			m.disable(ref.pluginID)
+		}
+		return nil, true
+	}
+	return res, true
 }
 
 // load resolves the version directory, validates the manifest and starts
 // the runtime for one plugin install dir.
 func (m *Manager) load(pluginDir string) (*loadedPlugin, error) {
-	fmt.Printf("DEBUG: Loading plugin from directory: %s\n", pluginDir)
 	dir, err := ResolveVersionDir(pluginDir)
 	if err != nil {
-		fmt.Printf("DEBUG: Failed to resolve version dir for %s: %v\n", pluginDir, err)
 		return nil, err
 	}
-	fmt.Printf("DEBUG: Resolved version directory: %s\n", dir)
 	manifest, err := LoadManifestFile(dir)
 	if err != nil {
-		fmt.Printf("DEBUG: Failed to load manifest from %s: %v\n", dir, err)
 		return nil, err
 	}
-	fmt.Printf("DEBUG: Loaded manifest for plugin: %s\n", manifest.ID)
 	perms := ParsePermissions(manifest.ID, manifest.Permissions, m.grant)
 	var storage *PluginStorage
 	if m.store != nil && perms.Granted("storage") {
@@ -152,7 +222,15 @@ func (m *Manager) load(pluginDir string) (*loadedPlugin, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &loadedPlugin{manifest: manifest, rt: rt}, nil
+	// Install source: the version pin records how the active version
+	// arrived (market install vs offline import); a missing pin means a
+	// manual directory copy, read as local.
+	pin, _ := ReadCurrentPin(filepath.Dir(dir))
+	source := pin.Source
+	if source != SourceMarket {
+		source = SourceLocal
+	}
+	return &loadedPlugin{manifest: manifest, rt: rt, source: source}, nil
 }
 
 // Shutdown stops every plugin runtime.
@@ -205,6 +283,7 @@ func (m *Manager) ListPlugins() []PluginInfo {
 			IconPath:     lp.rt.iconPath,
 			Disabled:     lp.disabled,
 			AutoDisabled: lp.disabled && lp.rt.Strikes() >= disableStrikes,
+			Source:       lp.source,
 		}
 		if info.Permissions == nil {
 			info.Permissions = []string{}
@@ -223,12 +302,15 @@ func (m *Manager) ListPlugins() []PluginInfo {
 
 // SetEnabled enables or disables a plugin (user action). Disabling is
 // persisted; enabling clears both the persisted state and any strike
-// counter. Auto-disabled plugins can be re-enabled the same way.
+// counter. Auto-disabled plugins can be re-enabled the same way. The
+// command index follows: disabling removes the plugin's prefixes, enabling
+// re-adds them.
 func (m *Manager) SetEnabled(pluginID string, enabled bool) error {
 	m.mu.Lock()
 	lp, ok := m.plugins[pluginID]
 	if ok {
 		lp.disabled = !enabled
+		m.rebuildCommandsLocked()
 	}
 	m.mu.Unlock()
 	if !ok {
@@ -246,13 +328,28 @@ func (m *Manager) SetEnabled(pluginID string, enabled bool) error {
 	return nil
 }
 
+// ClearDisabledState drops the persisted user-disable flag for pluginID.
+// The uninstall path calls it so reinstalling the same plugin later (from
+// the market or an offline import) loads enabled instead of inheriting the
+// stale disabled flag of the removed install.
+func (m *Manager) ClearDisabledState(pluginID string) {
+	if m.store == nil {
+		return
+	}
+	if err := m.store.DeleteNS(stateNamespace, pluginID); err != nil {
+		log.Printf("plugin: clear persisted state for %s: %v", pluginID, err)
+	}
+}
+
 // disable removes a plugin from the rotation (3 consecutive search
-// timeouts). Log-only here; re-enabling arrives with the settings UI.
+// timeouts), including from the command index. Log-only here; re-enabling
+// arrives with the settings UI.
 func (m *Manager) disable(pluginID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if lp, ok := m.plugins[pluginID]; ok && !lp.disabled {
 		lp.disabled = true
+		m.rebuildCommandsLocked()
 		log.Printf("plugin: disabled %s after %d consecutive timeouts", pluginID, disableStrikes)
 	}
 }

@@ -1,8 +1,6 @@
 package plugin
 
 import (
-	"fmt"
-
 	"kyvro/internal/core"
 )
 
@@ -137,26 +135,4 @@ func toStringSlice(v any) []string {
 		}
 	}
 	return out
-}
-
-// commandResult builds the surfaced row for a manifest command. Args
-// forwards the current query (V1 simplification; a real argument DSL is M2).
-func commandResult(m *Manifest, cmd Command, query string, score float64, iconPath string) core.SearchResult {
-	subtitle := cmd.Subtitle
-	if subtitle == "" {
-		subtitle = m.DisplayName()
-	}
-	return core.SearchResult{
-		ID:       fmt.Sprintf("plugin:%s:cmd:%s", m.ID, cmd.ID),
-		Title:    cmd.Title,
-		Subtitle: subtitle,
-		PrimaryAction: core.Action{
-			Kind:     core.ActionPlugin,
-			PluginID: m.ID,
-			ActionID: cmd.ID,
-			Args:     []string{query},
-		},
-		Score:    score,
-		IconPath: iconPath,
-	}
 }

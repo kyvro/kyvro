@@ -1,5 +1,5 @@
-// storage.js: activate() increments a persisted counter; search surfaces
-// the current value (proves storage round-trips through JS).
+// storage.js: activate() increments a persisted counter; the live call
+// surfaces the current value (proves storage round-trips through JS).
 var runs = "0";
 module.exports = {
   activate: function (ctx) {
@@ -7,9 +7,7 @@ module.exports = {
     ctx.storage.set("runs", n);
     runs = n;
   },
-  provider: {
-    search: function () {
-      return [{ id: "runs", title: "runs:" + runs, actions: [{ type: "copy", value: runs }] }];
-    }
+  onAction: function () {
+    return [{ id: "runs", title: "runs:" + runs, actions: [{ type: "copy", value: runs }] }];
   }
 };

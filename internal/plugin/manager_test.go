@@ -51,8 +51,8 @@ func TestManagerRunActionUnknownPlugin(t *testing.T) {
 
 func TestManagerCurrentJSONPinSelectsVersion(t *testing.T) {
 	root := t.TempDir()
-	v1 := `module.exports = {provider:{search:function(q){ if(q.indexOf("b64")===0){return [{id:"r",title:"one",actions:[{type:"copy",value:"1"}]}]} return [] }}}`
-	v2 := `module.exports = {provider:{search:function(q){ if(q.indexOf("b64")===0){return [{id:"r",title:"two",actions:[{type:"copy",value:"2"}]}]} return [] }}}`
+	v1 := `module.exports = {onAction:function(){return [{id:"r",title:"one",actions:[{type:"copy",value:"1"}]}]}}`
+	v2 := `module.exports = {onAction:function(){return [{id:"r",title:"two",actions:[{type:"copy",value:"2"}]}]}}`
 	writePluginDir(t, root, "com.example.test", "0.1.0", validManifest, v1)
 	writePluginDir(t, root, "com.example.test", "0.2.0", validManifest, v2)
 
@@ -98,6 +98,91 @@ func TestManagerShutdownReleasesWorkers(t *testing.T) {
 	}
 	// Shutdown is idempotent.
 	m.Shutdown()
+}
+
+// TestManagerLoadAllReplacesRuntimesWithoutLeak pins the reconcile
+// semantics: a reload pass creates fresh runtimes and must retire the
+// replaced ones (this is the path every install/import/uninstall exercises).
+func TestManagerLoadAllReplacesRuntimesWithoutLeak(t *testing.T) {
+	root := t.TempDir()
+	writePluginDir(t, root, "com.example.a", "0.1.0", manifestFor("com.example.a"), fixtureJS(t, "basic.js"))
+
+	m := NewManager(root, nil, nil)
+	m.LoadAll()
+	before := runtime.NumGoroutine()
+
+	m.LoadAll() // every runtime is replaced by a fresh one
+	m.Shutdown()
+
+	deadline := time.Now().Add(time.Second)
+	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if now := runtime.NumGoroutine(); now > before {
+		t.Errorf("goroutines after reload+shutdown: %d > %d (replaced runtime leaked)", now, before)
+	}
+}
+
+// TestManagerLoadAllDropsRemovedPlugins: after an uninstall removes the
+// plugin directory, the next LoadAll must evict it from the manager instead
+// of keeping a ghost entry alive until restart.
+func TestManagerLoadAllDropsRemovedPlugins(t *testing.T) {
+	root := t.TempDir()
+	dir := writePluginDir(t, root, "com.example.a", "0.1.0", manifestFor("com.example.a"), fixtureJS(t, "basic.js"))
+	m := NewManager(root, nil, nil)
+	m.LoadAll()
+	if len(m.ListPlugins()) != 1 {
+		t.Fatal("plugin must load")
+	}
+
+	if err := os.RemoveAll(filepath.Dir(dir)); err != nil {
+		t.Fatal(err)
+	}
+	m.LoadAll()
+	if got := m.ListPlugins(); len(got) != 0 {
+		t.Fatalf("uninstalled plugin must leave the manager, got %+v", got)
+	}
+	m.Shutdown()
+}
+
+// TestManagerClearDisabledState: uninstall must not leave a persisted
+// disable flag behind — reinstalling loads enabled.
+func TestManagerClearDisabledState(t *testing.T) {
+	root := t.TempDir()
+	writePluginDir(t, root, "com.example.a", "0.1.0", manifestFor("com.example.a"), fixtureJS(t, "basic.js"))
+	dbPath := filepath.Join(t.TempDir(), "data.db")
+
+	open := func() (*Manager, *core.Store) {
+		store, err := core.OpenStore(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := NewManager(root, store, nil)
+		m.LoadAll()
+		return m, store
+	}
+
+	m1, s1 := open()
+	if err := m1.SetEnabled("com.example.a", false); err != nil {
+		t.Fatal(err)
+	}
+	m1.Shutdown()
+	s1.Close()
+
+	// The uninstall path clears the flag (service calls ClearDisabledState
+	// after removing the directory).
+	m2, s2 := open()
+	m2.ClearDisabledState("com.example.a")
+	m2.Shutdown()
+	s2.Close()
+
+	m3, s3 := open()
+	defer s3.Close()
+	defer m3.Shutdown()
+	list := m3.ListPlugins()
+	if len(list) != 1 || list[0].Disabled {
+		t.Fatalf("plugin must load enabled after state clear: %+v", list)
+	}
 }
 
 func TestManagerListAndSetEnabled(t *testing.T) {
@@ -163,6 +248,33 @@ func TestManagerListAndSetEnabled(t *testing.T) {
 	})
 }
 
+// TestManagerInstallSource: the install source recorded in current.json is
+// exposed through ListPlugins; a missing pin (manual copy) reads as local.
+func TestManagerInstallSource(t *testing.T) {
+	root := t.TempDir()
+	dir := writePluginDir(t, root, "com.example.a", "0.1.0", manifestFor("com.example.a"), fixtureJS(t, "basic.js"))
+	pinPath := filepath.Join(filepath.Dir(dir), CurrentFile)
+
+	if err := os.WriteFile(pinPath, []byte(`{"version":"0.1.0","source":"market"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(root, nil, nil)
+	m.LoadAll()
+	defer m.Shutdown()
+	if list := m.ListPlugins(); len(list) != 1 || list[0].Source != SourceMarket {
+		t.Fatalf("want market source, got %+v", list)
+	}
+
+	// No pin → manual copy semantics.
+	if err := os.Remove(pinPath); err != nil {
+		t.Fatal(err)
+	}
+	m.LoadAll()
+	if list := m.ListPlugins(); len(list) != 1 || list[0].Source != SourceLocal {
+		t.Fatalf("missing pin must read as local, got %+v", list)
+	}
+}
+
 // firstTitle returns the first plugin-provider result title for query.
 func firstTitle(t *testing.T, m *Manager, query string) string {
 	t.Helper()
@@ -210,7 +322,7 @@ func copyPlugin(t *testing.T, srcDir string) string {
 }
 
 // TestExamplePluginIsValid keeps the shipped example installable: it must
-// load through the real manager and answer both extension points.
+// load through the real manager and answer both prefix commands.
 func TestExamplePluginIsValid(t *testing.T) {
 	src := filepath.Join("..", "..", "plugins-example", "com.example.encode")
 	if _, err := os.Stat(src); err != nil {
@@ -220,9 +332,10 @@ func TestExamplePluginIsValid(t *testing.T) {
 	m.LoadAll()
 	defer m.Shutdown()
 
+	// b64 live rows: base64("hello") = "aGVsbG8=".
 	results := m.Provider().Search(context.Background(), "b64 hello")
-	if len(results) == 0 {
-		t.Fatal("example plugin did not answer b64 search")
+	if len(results) != 1 || results[0].Title != "aGVsbG8=" {
+		t.Fatalf("example plugin did not answer b64 search: %+v", results)
 	}
 	// Valid base64 input must also produce a decode row ("hello").
 	decoded := false
@@ -234,19 +347,25 @@ func TestExamplePluginIsValid(t *testing.T) {
 	if !decoded {
 		t.Fatal("example plugin did not decode valid base64")
 	}
-	cmds := m.Provider().Search(context.Background(), "url")
+	// url live rows: "url hello world" → URL-encoded row.
+	urlRows := m.Provider().Search(context.Background(), "url hello world")
 	found := false
-	for _, r := range cmds {
-		if r.PrimaryAction.Kind == core.ActionPlugin && r.PrimaryAction.ActionID == "encode.url" {
+	for _, r := range urlRows {
+		if r.Title == "hello%20world" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("example command did not surface for 'url'")
+		t.Fatalf("example url command did not answer: %+v", urlRows)
 	}
-	secondary, err := m.RunAction(context.Background(), "com.example.encode", "encode.url", []string{"url"})
+	// Direct onAction invocation (callback path) still works.
+	secondary, err := m.RunAction(context.Background(), "com.example.encode", "encode.url", []string{"url hello%20world"})
 	if err != nil || len(secondary) == 0 {
 		t.Fatalf("example onAction failed: %+v %v", secondary, err)
+	}
+	// Ordinary words sharing the prefixes must never reach the plugin.
+	if got := m.Provider().Search(context.Background(), "urlish stuff"); len(got) != 0 {
+		t.Fatalf("word without boundary must not match, got %+v", got)
 	}
 }
 
@@ -295,5 +414,9 @@ func TestOfficialGhPluginIsValid(t *testing.T) {
 	}
 	if got := m.Provider().Search(context.Background(), "gh  "); len(got) != 0 {
 		t.Fatalf("blank input must not match, got %+v", got)
+	}
+	// Bare "gh" hits the index but the plugin stays silent without input.
+	if got := m.Provider().Search(context.Background(), "gh"); len(got) != 0 {
+		t.Fatalf("bare prefix must produce no rows, got %+v", got)
 	}
 }

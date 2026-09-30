@@ -48,22 +48,12 @@ export function AddSnippet(trigger, replacement) {
 }
 
 /**
- * AllPlugins combines installed and available plugins for the settings UI.
- * @returns {$CancellablePromise<plugin$0.PluginInfo[]>}
- */
-export function AllPlugins() {
-    return $Call.ByID(845651830).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType2($result);
-    }));
-}
-
-/**
  * AvailablePlugins fetches the list of plugins available from the official registry.
  * @returns {$CancellablePromise<plugin$0.RemotePlugin[]>}
  */
 export function AvailablePlugins() {
     return $Call.ByID(1804721074).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType4($result);
+        return $$createType2($result);
     }));
 }
 
@@ -74,7 +64,7 @@ export function AvailablePlugins() {
  */
 export function Browsers() {
     return $Call.ByID(1142220318).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType5($result);
+        return $$createType3($result);
     }));
 }
 
@@ -91,7 +81,7 @@ export function Browsers() {
  */
 export function Execute(id, actionID) {
     return $Call.ByID(2894020374, id, actionID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType7($result);
+        return $$createType5($result);
     }));
 }
 
@@ -110,8 +100,18 @@ export function ExternalBrowser() {
  */
 export function FolderSources() {
     return $Call.ByID(1684839075).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType9($result);
+        return $$createType7($result);
     }));
+}
+
+/**
+ * ImportPluginZip opens a native zip picker (offline import), installs the
+ * archive into the plugins directory and hot-reloads. It returns the
+ * imported plugin ID; a cancelled dialog returns ("", nil).
+ * @returns {$CancellablePromise<string>}
+ */
+export function ImportPluginZip() {
+    return $Call.ByID(3179607268);
 }
 
 /**
@@ -140,7 +140,7 @@ export function PickFolderSourcePath() {
  */
 export function Plugins() {
     return $Call.ByID(444198097).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType2($result);
+        return $$createType9($result);
     }));
 }
 
@@ -204,7 +204,7 @@ export function RevealPluginsFolder() {
  */
 export function Search(query) {
     return $Call.ByID(2004525483, query).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType7($result);
+        return $$createType5($result);
     }));
 }
 
@@ -303,14 +303,14 @@ export function Version() {
 
 // Private type creation functions
 const $$createType0 = core$0.FolderSource.createFrom;
-const $$createType1 = plugin$0.PluginInfo.createFrom;
+const $$createType1 = plugin$0.RemotePlugin.createFrom;
 const $$createType2 = $Create.Array($$createType1);
-const $$createType3 = plugin$0.RemotePlugin.createFrom;
-const $$createType4 = $Create.Array($$createType3);
-const $$createType5 = $Create.Array($Create.Any);
-const $$createType6 = core$0.SearchResult.createFrom;
+const $$createType3 = $Create.Array($Create.Any);
+const $$createType4 = core$0.SearchResult.createFrom;
+const $$createType5 = $Create.Array($$createType4);
+const $$createType6 = core$0.FolderSourceInfo.createFrom;
 const $$createType7 = $Create.Array($$createType6);
-const $$createType8 = core$0.FolderSourceInfo.createFrom;
+const $$createType8 = plugin$0.PluginInfo.createFrom;
 const $$createType9 = $Create.Array($$createType8);
 const $$createType10 = core$0.Snippet.createFrom;
 const $$createType11 = $Create.Array($$createType10);

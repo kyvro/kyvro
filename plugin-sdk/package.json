@@ -1,6 +1,6 @@
 {
   "name": "@kyvro/plugin-sdk",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Type definitions and development SDK for Kyvro plugins",
   "license": "MIT",
   "types": "./index.d.ts",

@@ -11,12 +11,9 @@ import (
 	"kyvro/internal/core"
 )
 
-func TestRuntimeSearchConvertsResults(t *testing.T) {
+func TestRuntimeRunActionConvertsResults(t *testing.T) {
 	rt := newTestRuntime(t, validManifest, fixtureJS(t, "basic.js"))
-	if !rt.HasProvider() {
-		t.Fatal("provider not detected")
-	}
-	results, err := rt.Search(context.Background(), "b64 hello", 150*time.Millisecond)
+	results, err := rt.RunAction(context.Background(), "test.cmd", []string{"b64 hello"}, 150*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,14 +30,16 @@ func TestRuntimeSearchConvertsResults(t *testing.T) {
 	if r.Score != scoreHintMax {
 		t.Errorf("scoreHint 60 must clamp to %v, got %v", scoreHintMax, r.Score)
 	}
-	if r.PrimaryAction.Kind != core.ActionCopyText || r.PrimaryAction.Arg != "copied" {
-		t.Errorf("action = %+v", r.PrimaryAction)
+	// First action becomes primary: the callback.
+	a := r.PrimaryAction
+	if a.Kind != core.ActionPlugin || a.ActionID != "back" || len(a.Args) != 1 || a.Args[0] != "x" {
+		t.Errorf("primary action = %+v", a)
 	}
 }
 
-func TestRuntimeSearchDropsInvalidEntries(t *testing.T) {
+func TestRuntimeRunActionDropsInvalidEntries(t *testing.T) {
 	rt := newTestRuntime(t, validManifest, fixtureJS(t, "bad_entries.js"))
-	results, err := rt.Search(context.Background(), "b64 x", 150*time.Millisecond)
+	results, err := rt.RunAction(context.Background(), "test.cmd", []string{"b64 x"}, 150*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,9 +57,9 @@ func TestRuntimeSearchDropsInvalidEntries(t *testing.T) {
 	}
 }
 
-func TestRuntimeSearchInfiniteLoopTimesOut(t *testing.T) {
+func TestRuntimeInfiniteLoopTimesOut(t *testing.T) {
 	rt := newTestRuntime(t, validManifest, fixtureJS(t, "spin.js"))
-	_, err := rt.Search(context.Background(), "b64 x", 60*time.Millisecond)
+	_, err := rt.RunAction(context.Background(), "test.cmd", []string{"b64 x"}, 60*time.Millisecond)
 	if code, ok := CodeOf(err); !ok || code != ErrTimeout {
 		t.Fatalf("want TIMEOUT, got %v", err)
 	}
@@ -71,28 +70,28 @@ func TestRuntimeSearchInfiniteLoopTimesOut(t *testing.T) {
 
 func TestRuntimeTimeoutDropsLateResultAndRecovers(t *testing.T) {
 	rt := newTestRuntime(t, validManifest, fixtureJS(t, "spin_then_return.js"))
-	_, err := rt.Search(context.Background(), "b64 x", 80*time.Millisecond)
+	_, err := rt.RunAction(context.Background(), "test.cmd", []string{"b64 x"}, 80*time.Millisecond)
 	if code, ok := CodeOf(err); !ok || code != ErrTimeout {
 		t.Fatalf("want TIMEOUT, got %v", err)
 	}
 	// The worker finishes the slow call (~300ms) and its late result must be
 	// dropped, not delivered to the abandoned request. A follow-up call with
 	// a generous budget must succeed and reset the strike counter.
-	results, err := rt.Search(context.Background(), "b64 again", time.Second)
+	results, err := rt.RunAction(context.Background(), "test.cmd", []string{"b64 again"}, time.Second)
 	if err != nil {
 		t.Fatalf("runtime did not recover: %v", err)
 	}
 	if len(results) != 1 || results[0].Title != "late" {
-		t.Fatalf("recovered search returned %+v", results)
+		t.Fatalf("recovered call returned %+v", results)
 	}
 	if rt.Strikes() != 0 {
 		t.Errorf("strikes = %d after success, want 0", rt.Strikes())
 	}
 }
 
-func TestRuntimeSearchException(t *testing.T) {
+func TestRuntimeRunActionException(t *testing.T) {
 	rt := newTestRuntime(t, validManifest, fixtureJS(t, "throw.js"))
-	_, err := rt.Search(context.Background(), "b64 x", 150*time.Millisecond)
+	_, err := rt.RunAction(context.Background(), "test.cmd", []string{"b64 x"}, 150*time.Millisecond)
 	code, ok := CodeOf(err)
 	if !ok || code != ErrPluginException {
 		t.Fatalf("want PLUGIN_EXCEPTION, got %v", err)
@@ -102,13 +101,13 @@ func TestRuntimeSearchException(t *testing.T) {
 	}
 }
 
-func TestRuntimeStorageAbsentWithoutPermission(t *testing.T) {
+func TestRuntimeContextAbsentsWithoutPermission(t *testing.T) {
 	m := manifestMap(t, validManifest)
 	delete(m, "permissions")
-	// Loading fails loudly if ctx.storage leaks without a grant.
+	// Loading fails loudly if ctx.storage or ctx.template leaks.
 	rt, err := buildRuntime(t, marshal(t, m), fixtureJS(t, "no_storage.js"), nil)
 	if err != nil {
-		t.Fatalf("no-storage plugin must load: %v", err)
+		t.Fatalf("no-permission plugin must load: %v", err)
 	}
 	rt.Shutdown()
 }
@@ -125,11 +124,11 @@ func TestRuntimeStorageRoundtripAndPersistence(t *testing.T) {
 			store.Close()
 			t.Fatalf("load: %v", err)
 		}
-		results, err := rt.Search(context.Background(), "b64 x", 150*time.Millisecond)
+		results, err := rt.RunAction(context.Background(), "test.cmd", []string{"b64 x"}, 150*time.Millisecond)
 		rt.Shutdown()
 		store.Close()
 		if err != nil {
-			t.Fatalf("search: %v", err)
+			t.Fatalf("call: %v", err)
 		}
 		if len(results) != 1 {
 			t.Fatalf("want 1 result, got %+v", results)
@@ -152,7 +151,7 @@ func TestRuntimeRunActionCallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].Title != "action:test.cmd:arg1" {
+	if len(results) != 1 || results[0].Title != "P:arg1" {
 		t.Fatalf("unexpected results: %+v", results)
 	}
 	// First action is the callback; it must round-trip through the plugin.
@@ -171,7 +170,7 @@ func TestRuntimeRunActionCallback(t *testing.T) {
 
 func TestRuntimeActivatePromiseAwaited(t *testing.T) {
 	rt := newTestRuntime(t, validManifest, fixtureJS(t, "async.js"))
-	results, err := rt.Search(context.Background(), "b64 x", 150*time.Millisecond)
+	results, err := rt.RunAction(context.Background(), "test.cmd", []string{"b64 x"}, 150*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +199,7 @@ func TestRuntimeIconAttachedWhenPresent(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(rt.Shutdown)
-	results, err := rt.Search(context.Background(), "b64 x", 150*time.Millisecond)
+	results, err := rt.RunAction(context.Background(), "test.cmd", []string{"b64 x"}, 150*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +223,7 @@ func TestRuntimeIconAttachedWhenPresent(t *testing.T) {
 		t.Fatalf("missing icon must not fail the load: %v", err)
 	}
 	t.Cleanup(rt2.Shutdown)
-	results, err = rt2.Search(context.Background(), "b64 x", 150*time.Millisecond)
+	results, err = rt2.RunAction(context.Background(), "test.cmd", []string{"b64 x"}, 150*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,13 +232,10 @@ func TestRuntimeIconAttachedWhenPresent(t *testing.T) {
 	}
 }
 
-func TestRuntimeWithoutProvider(t *testing.T) {
+func TestRuntimeWithoutOnAction(t *testing.T) {
 	rt := newTestRuntime(t, validManifest, fixtureJS(t, "minimal.js"))
-	if rt.HasProvider() {
-		t.Fatal("minimal.js must not expose a provider")
-	}
-	results, err := rt.Search(context.Background(), "b64 x", 150*time.Millisecond)
-	if err != nil || results != nil {
-		t.Fatalf("search without provider = %+v, %v", results, err)
+	_, err := rt.RunAction(context.Background(), "test.cmd", []string{"b64 x"}, 150*time.Millisecond)
+	if code, ok := CodeOf(err); !ok || code != ErrInvalidArgument {
+		t.Fatalf("RunAction without onAction must be INVALID_ARGUMENT, got %v", err)
 	}
 }

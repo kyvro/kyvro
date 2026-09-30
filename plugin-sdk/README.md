@@ -38,9 +38,8 @@ A plugin is an installed directory:
   "main": "index.js",
   "icon": "icon.svg",
   "minHostVersion": "0.1.0",
-  "activationEvents": ["onStartup", "onSearchPrefix:demo"],
   "permissions": ["storage"],
-  "commands": [{ "id": "hello", "title": "Hello" }]
+  "commands": [{ "id": "hello", "title": "Hello", "prefix": "demo" }]
 }
 ```
 
@@ -53,13 +52,14 @@ A plugin is an installed directory:
  * @type {import("@kyvro/plugin-sdk").Plugin}
  */
 module.exports = {
-  provider: {
-    search(query) {
-      const term = query.replace(/^\S+\s*/, "");
-      return term
-        ? [{ id: "copy", title: term, actions: [{ type: "copy", value: term }] }]
-        : [];
-    }
+  onAction(actionId, args) {
+    // Live prefix hit: the FULL query including the prefix arrives as
+    // args[0] ("demo vim" stays "demo vim") — slice it yourself.
+    const query = String(args[0] ?? "");
+    const term = query.replace(/^\S+\s*/, "");
+    return term
+      ? [{ id: "copy", title: term, actions: [{ type: "copy", value: term }] }]
+      : [];
   },
 
   activate(ctx) {
@@ -77,22 +77,21 @@ All members of `module.exports` are optional:
 
 | Member | Purpose | Notes |
 |---|---|---|
-| `provider.search(query)` | Live search | Runs only while the query matches a declared `onSearchPrefix:` event; receives the FULL query including the prefix. ~150ms budget per call; three consecutive timeouts auto-disable the plugin. |
-| `onAction(actionId, args[])` | Callback entry | Invoked for `callback` actions and activated manifest commands (commands forward the whole query as `args[0]`). Must return rows. |
-| `activate(ctx)` | Init hook | ~2s budget incl. awaited Promise; register template functions, warm up storage. |
+| `onAction(actionId, args[])` | Only business entry | **prefix hit (live)**: called on every keystroke while the query matches a declared command `prefix` (word-boundary match, case-insensitive); actionId is the command's `id`, the FULL query arrives as `args[0]`, ~150ms budget, three consecutive timeouts auto-disable the plugin. **callback action**: called once when the user runs a `callback` action; actionId is the action's `id`, `args` is the action's `args ?? []`, ~5s budget. |
+| `activate(ctx)` | Init hook | ~2s budget incl. awaited Promise; warm up storage. The only lifecycle callback — no unload/deactivate hook exists (cleanup is host-side). |
 
 There is no `require()` / ESM support inside the VM; a plugin is a single CommonJS script.
 
 ## Result Rows & Actions
 
-Both `search` and `onAction` return (or resolve to) arrays of rows:
+`onAction` returns (or resolves to) arrays of rows:
 
 ```js
 {
   id: "repo",                    // becomes plugin:<pluginId>:<rowId>
   title: "GitHub",
   subtitle: "Open github.com",
-  scoreHint: 10,                 // clamped to 0..50; fuzzy match still dominates
+  scoreHint: 10,                 // clamped to 0..50
   actions: [                     // >= 1 action required
     { type: "open-url", url: "https://github.com" },
     { type: "copy", value: "text" },
@@ -111,7 +110,6 @@ Unimplemented capabilities are simply absent from the context — feature-detect
 |---|---|---|
 | `storage` | Only when `"storage"` permission granted | Persistent string→string KV (`get`/`set`/`delete`), bucket `plugin:<id>` |
 | `log` | Always | `info` / `warn` / `error(...parts)` into the app log |
-| `template` | Always | `registerFunc(name, fn)` for `${name(...)}` snippet templates |
 
 ## Permissions
 

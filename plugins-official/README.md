@@ -19,3 +19,11 @@ cp plugins-official/com.kyvro.github/* \
 ```
 
 也可在 设置 → Plugins → Open Plugins Folder 打开目录后手动拷入。卸载即删除对应插件目录。
+
+## 打包发布
+
+```sh
+build/package-plugins.sh
+```
+
+脚本遍历本目录下每个插件，按 manifest 生成 `plugins/<id>/<id>-<version>.zip`（包内文件位于根目录），把版本累积合并进 `plugins/list.json`（升序 SemVer，`minVersions` 取各自 manifest 的 `minHostVersion`），并以同一 ISO 8601 时间戳刷新 `plugins/lastUpdated`。不在本目录的已发布插件（如 textsnippets）保持原样。生成结果即 registry 布局（见 plugin-marketplace.md），拷入 kyvro/plugins 仓库提交发布。

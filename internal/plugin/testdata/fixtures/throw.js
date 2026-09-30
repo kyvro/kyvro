@@ -1,8 +1,6 @@
-// throw.js: search throws a JS exception.
+// throw.js: onAction throws a JS exception.
 module.exports = {
-  provider: {
-    search: function () {
-      throw new Error("boom");
-    }
+  onAction: function () {
+    throw new Error("boom");
   }
 };

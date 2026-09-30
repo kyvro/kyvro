@@ -1,383 +1,267 @@
 # 插件系统
 
-本文档描述 Kyvro 的插件系统架构与开发指南。插件市场信息见 [plugin-marketplace.md](./plugin-marketplace.md)。
+本文档是 Kyvro 插件扩展模块的**协议文档**：定义插件的声明方式、统一接口、结果与动作、上下文 API、权限与错误契约。宿主实现（`internal/plugin/`）与 SDK 类型定义（`plugin-sdk/index.d.ts`，`@kyvro/plugin-sdk`）以本协议为准；协议统一 Command 模型，当前代码已按本协议落地（迁移记录见 §11）。
 
-## 设计目标
+插件市场见 [plugin-marketplace.md](./plugin-marketplace.md)；权限系统详见 [permissions.md](./permissions.md)。
 
-插件系统允许用户和开发者扩展 Kyvro 的功能，无需修改核心代码。插件可以：
-- 提供自定义搜索功能（通过前缀触发）
-- 声明静态命令（通过模糊匹配触发）
-- 持久化数据（独立存储空间）
-- 执行多种操作（打开链接、复制文本、二级交互）
-- 注册模板函数供 Text Snippets 使用
+## 协议总览
 
-### 动态模板
+| 协议部分 | 载体 | 说明 |
+|-----|-----|-----|
+| Manifest | `plugin.json`（schemaVersion 1） | 静态声明：身份、入口、命令（触发）、权限 |
+| 命令 | manifest `commands[]` | 唯一扩展类型；`prefix` 自描述触发，prefix 建入命令索引（建立/移除时机见 [index.md](./index.md)） |
+| 统一接口 | `module.exports.onAction` | 唯一业务入口，所有调用来源共用 |
+| 生命周期钩子 | `module.exports.activate` | 加载时执行一次，非扩展类型接口 |
+| 结果行 | `ResultRow[]` | 所有调用返回的结果条目 |
+| 动作 | `PluginAction` | `open-url` / `copy` / `callback`，由宿主执行 |
+| 上下文 | `activate(ctx)` 参数 | `storage` / `log` 能力面 |
+| 权限 | manifest `permissions` | 决定 ctx 上注入哪些能力 |
+| 错误码 | `PluginError` | 所有失败的统一错误契约 |
+| 生命周期 | 超时与禁用规则 | 按调用来源分配时间预算 |
 
-插件系统提供模板函数注册能力，用于 Text Snippets 动态内容：
+每个插件运行在独立沙箱（独立 JS VM，无宿主 API 直通）。一个插件 = N 个命令 + 1 个业务入口。
 
-#### 模板语法
+## 1. 扩展类型：Command
+
+一个扩展类型对应一份接口契约。当前唯一类型是 **Command**：宿主在查询命中命令时调用插件，插件返回结果行。
+
+命令经 **prefix 索引**触发，调用时机只有两种，接口同为 `onAction`：
+
+| 调用来源 | 声明 | 宿主行为 | 调用时机 |
+|-----|-----|-----|-----|
+| prefix 命中（live） | `commands[].prefix` | 查询前缀命中命令索引 → live 调用 | **每次键入调用**（150ms 预算），结果进主列表实时刷新 |
+| callback 动作 | ResultRow 的 `callback` action | 用户执行行动作 | **调用一次**（5s 预算），返回下一级列表 |
+
+- 两种调用来源共用同一接口、同一结果行 schema；差别只在宿主调用时机与结果去向（主列表 / 下一级列表）
+- 当前协议没有显式的类型注册字段，命令由 manifest `commands[]` 自描述
+
+**命令索引**：加载 / 安装插件时把 `commands[].prefix` 建入宿主命令索引，查询在索引上做前缀精确检索，命中才 live 调用插件。匹配路径零 JS、检索 O(1)；禁用 / 卸载时 prefix 同步移出索引。索引的建立与移除时机、存储布局见 [index.md](./index.md)。
+
+### 1.1 计划中的扩展类型（接口待定义）
+
+每个新类型引入时需同时定义其接口契约、激活方式与权限要求，并保持同类型同接口：
+
+| 扩展类型 | 目标 |
+|-----|-----|
+| Match Handler（`match_handler`） | 消费 Typed Match（如 `math.expression`），按类型分发 |
+| Action Provider（`action_provider`） | 为已有 Result 追加可执行操作，优先消费结构化 Handle |
+| Background Service（`background_service`） | 常驻服务，需 `background` 权限与资源管理 |
+| Agent Tool（`agent_tool`） | 向 Kyvro Agent 暴露结构化工具，权限继承插件自身 |
+
+## 2. Manifest（plugin.json）
+
+### 2.1 安装目录
 
 ```
-${func("arg1","arg2")}
+~/Library/Application Support/Kyvro/plugins/<plugin-id>/
+├── <version>/           # 版本目录（SemVer）
+│   ├── plugin.json      # 必需
+│   ├── main.js          # 入口（manifest.main）
+│   └── icon.png         # 可选（manifest.icon）
+└── current.json         # 可选：{"version": "1.0.0"} 固定版本
 ```
 
-#### 注册模板函数
+- 版本选择：`current.json` 优先，否则取最高 SemVer 版本目录，垃圾目录忽略
+- manifest `id` 必须与安装目录名一致
 
-插件可以在 `activate` 钩子中注册模板函数，供 Text Snippets 使用：
+### 2.2 字段
 
-```javascript
-module.exports.activate = (ctx) => {
-  // 注册日期函数
-  ctx.template.registerFunc("date", (args) => {
-    const format = args[0] || "YYYY-MM-DD";
-    const now = new Date();
-    // 格式化日期...
-    return formattedDate;
-  });
+| 字段 | 必需 | 约束 |
+|-----|-----|-----|
+| `schemaVersion` | ✅ | 仅 `1`，其他值拒绝 |
+| `id` | ✅ | 反向域名（≥2 个小写 label），与目录名一致 |
+| `version` | ✅ | SemVer |
+| `minHostVersion` | ✅ | SemVer，不得超过运行中的宿主版本 |
+| `main` | ✅ | 版本目录内相对路径，禁止绝对路径与 `..` 逃逸 |
+| `name` | — | 显示名，缺省用 id |
+| `description` / `author` | — | 描述 / `{name, url?}` |
+| `icon` | — | 版本目录内相对路径 |
+| `platforms` | — | 声明时必须包含宿主平台（`darwin` 等） |
+| `permissions` | — | 权限声明，见 §7 |
+| `commands` | — | 命令声明（触发自描述），见 §2.3 |
 
-  // 注册 UUID 生成函数
-  ctx.template.registerFunc("uuid", (args) => {
-    return crypto.randomUUID();
-  });
+校验失败返回 `INVALID_ARGUMENT`；schema / 宿主版本 / 平台不匹配返回 `INCOMPATIBLE_VERSION`。
 
-  ctx.log.info("Template functions registered");
-};
-```
-
-#### 官方 Text Snippets Plugin
-
-官方插件 `com.kyvro.textsnippets` 提供内置模板函数：
-
-- `${date("format")}` - 当前日期/时间
-- `${now("format")}` - 当前时间（别名）
-- `${today("format")}` - 今天日期
-- `${timestamp()}` - Unix 时间戳
-- `${uuid()}` - 随机 UUID
-- `${uuid()}` - 随机 UUID
-
-**格式占位符：**
-- `YYYY` - 4位年份，`YY` - 2位年份
-- `MM` - 月份，`DD` - 日期
-- `HH` - 24小时制，`mm` - 分钟，`ss` - 秒
-
-#### Text Snippets 集成
-
-Text Snippets 可使用任何插件注册的模板函数：
+### 2.3 命令（commands）
 
 ```json
 {
-  "trigger": "dd",
-  "replacement": "${date(\"YYMMDD\")}"
+  "id": "github.search",
+  "title": "GitHub Search",
+  "prefix": "gh"
 }
 ```
 
-输入 `dd` → 扩展为 `260825`（当前日期）
+| 字段 | 必需 | 约束 |
+|-----|-----|-----|
+| `id` | ✅ | manifest 内唯一；作为 `onAction` 的 `actionId` |
+| `title` | — | 显示名（设置页等），缺省用 id |
+| `prefix` | ✅ | 触发前缀，建入命令索引；匹配大小写不敏感 |
 
-## 架构概览
+## 3. 调用语义
 
-```
-main.go
-  └─ service/SearchService
-      └─ internal/core/Engine
-          └─ internal/plugin/Manager
-              └─ PluginProvider (聚合所有插件)
-                  ├─ 命令浮出（模糊匹配，无 JS 调用）
-                  └─ 实时搜索（前缀门控，并行调用 JS）
-```
+统一接口 `onAction(actionId, args)` 的两种调用来源：
 
-**Provider 优先级顺序**：`[calc, apps, plugins, web]`
+| 调用来源 | `actionId` | `args` | 预算 | 结果去向 |
+|-----|-----|-----|-----|-----|
+| prefix 命中（live） | 命令 `id` | `[完整查询]` | 150ms | 主列表 |
+| callback 动作 | callback 的 `id` | 自定义 `args` | 5s | 下一级列表 |
 
-## 插件清单（Manifest）
+- 完整查询包含前缀（如 `"gh kyvro"`），插件自行截取业务部分
+- live 调用迟到结果丢弃；连续超时见 §9
+- 插件返回非数组值按 `INVALID_ARGUMENT` 处理
 
-### 文件结构
+`actionId` 对宿主是不透明字符串：取值为插件自有的命令 id 或 callback id（插件自己的命名空间），宿主不解释具体值、不按值分派——宿主逻辑只区分上表的调用来源（时机 / 预算 / 结果去向），id 由插件自行分派。
 
-```
-~/Library/Application Support/Kyvro/plugins/
-├── com.example.encode/
-│   ├── 1.0.0/
-│   │   ├── plugin.json        # 必需的清单文件
-│   │   ├── main.js            # 入口文件（manifest.main 指定）
-│   │   └── icon.png           # 可选图标（manifest.icon 指定）
-│   └── current.json           # 可选：固定版本（"version": "1.0.0"）
-└── com.kyvro.github/
-    └── 2.1.0/
-        └── plugin.json
-```
+## 4. 导出协议（module.exports）
 
-### Manifest 字段
+CommonJS（无 `require` / ESM）；返回值支持同步或 Promise。
 
-```json
-{
-  "schemaVersion": 1,                    // 必需，当前固定为 1
-  "id": "com.example.encode",            // 必需，反向域名格式，须与目录名一致
-  "name": "Base64 Encoder",              // 可选，显示名称
-  "version": "1.0.0",                     // 必需，SemVer 格式
-  "minHostVersion": "0.1.0",              // 必需，最低 Kyvro 版本
-  "description": "Encode and decode...", // 可选，描述
-  "author": {                             // 可选，作者信息
-    "name": "Your Name",
-    "url": "https://example.com"
-  },
-  "main": "main.js",                      // 必需，入口文件相对路径
-  "icon": "icon.png",                     // 可选，图标文件相对路径
-  "platforms": ["darwin"],               // 可选，平台过滤
-  "permissions": ["storage"],             // 可选，权限声明
-  "commands": [                           // 可选，静态命令声明
-    {
-      "id": "encode.url",
-      "title": "URL Encode",
-      "subtitle": "Encode text for URLs",
-      "keywords": ["urlencode", "percent"]
-    }
-  ],
-  "activationEvents": [                  // 必需，激活事件
-    "onSearchPrefix:b64 ",
-    "onCommand:encode.url"
-  ]
-}
-```
+| 导出 | 签名 | 说明 |
+|-----|-----|-----|
+| `onAction` | `(actionId, args: string[]) => ResultRow[] \| Promise` | **唯一业务入口**。三种调用来源见 §3 |
+| `activate` | `(ctx) => void \| Promise` | 生命周期钩子，加载时执行一次（唯一生命周期回调，无卸载回调，见 §9）；非扩展类型接口 |
 
-### 激活事件类型
+## 5. 结果行与动作
 
-| 事件类型 | 说明 | 示例 |
-|---------|------|------|
-| `onStartup` | 应用启动时激活（用于模板函数注册等后台任务） | `"onStartup"` |
-| `onSearchPrefix:<prefix>` | 搜索前缀，查询以此开头时触发 | `"onSearchPrefix:gh "` |
-| `onCommand:<id>` | 命令触发，通过模糊匹配浮出 | `"onCommand:encode.url"` |
+### 5.1 ResultRow
 
-## 插件开发
+| 字段 | 必需 | 说明 |
+|-----|-----|-----|
+| `id` | ✅ | 行内唯一；宿主命名空间为 `plugin:<pluginId>:<id>` |
+| `title` | ✅ | 标题 |
+| `actions` | ✅ | 非空数组；第一个 action 为回车主操作 |
+| `subtitle` | — | 副标题 |
+| `scoreHint` | — | 0–50 软排序提示；模糊相关性仍主导排序 |
 
-### JavaScript 入口（CommonJS）
+规则：
 
-```javascript
-// main.js
-const { storage } = ctx;
+- 缺少 `id`、`title` 或合法 `actions` 的行被静默丢弃（计数写日志），不影响宿主
+- 未知 action 类型使整行失效
+- 结果行使用 manifest 图标渲染
 
-// 声明命令（可选，也可在 manifest 中静态声明）
-module.exports.commands = [
-  {
-    id: "my.cmd",
-    title: "My Command",
-    keywords: ["alias"]
-  }
-];
+### 5.2 PluginAction
 
-// 提供实时搜索（可选）
-module.exports.provider = {
-  search: async (query, signal) => {
-    // query: 完整查询（包含前缀）
-    // signal: AbortSignal，用于响应超时
-    const results = [];
-    // ... 处理逻辑
-    return [
-      {
-        id: "unique-id",
-        title: "Result Title",
-        subtitle: "Optional subtitle",
-        scoreHint: 10,  // 可选，0-50，影响排序
-        action: {
-          kind: "open-url",  // 或 "copy" 或 "callback"
-          arg: "https://example.com"
-        }
-      }
-    ];
-  }
-};
+| type | 字段 | 宿主行为 |
+|-----|-----|-----|
+| `open-url` | `url` | 用用户设置的浏览器打开 URL |
+| `copy` | `value` | 复制文本到剪贴板 |
+| `callback` | `id`、`args?` | 调用 `onAction(id, args ?? [])`，返回下一级列表；其余动作执行后隐藏窗口 |
 
-// 处理命令回调（可选）
-module.exports.onCommand = async (commandId, args) => {
-  // commandId: 命令 ID
-  // args: 参数数组（来自查询）
-  return [
-    {
-      id: "result-1",
-      title: "Secondary Result",
-      action: { kind: "copy", arg: "text to copy" }
-    }
-  ];
-};
+## 6. 上下文（PluginContext）
 
-// 激活钩子（可选，返回 Promise）
-module.exports.activate = async (ctx) => {
-  // 初始化逻辑
-  console.log("Plugin activated");
-};
+`activate(ctx)` 收到的能力面。未授权 / 未实现的命名空间**不出现在 ctx 上**，插件应 feature-detect（`if (ctx.storage)`）。
+
+| API | 权限 | 契约 |
+|-----|-----|-----|
+| `ctx.storage.get/set/delete` | `storage` | 同步 string→string KV；键值经 JS ToString 后持久化到插件专属 bucket `plugin:<id>`，跨升级 / 重载保留 |
+| `ctx.log.info/warn/error(...)` | 无 | 写宿主日志：`plugin <id> [<level>]: …` |
+
+## 7. 权限
+
+manifest `permissions` 声明 `<capability>` 或 `<capability>:<scope>` 形式。模型为 default-deny：
+
+| capability | 状态 | 行为 |
+|-----|-----|-----|
+| `storage` | ✅ 实现 | 声明即授权，注入 `ctx.storage` |
+| `network` / `filesystem` / `shell` / `clipboard` / `secrets` / `background` / `system` | ⏳ 保留 | API 不注入；调用返回 `CAPABILITY_UNAVAILABLE` |
+| 未知能力 | — | `PERMISSION_DENIED` |
+
+三态校验语义、授权策略、Trust Level 与 Capability 演进方向见 [permissions.md](./permissions.md)。
+
+## 8. 错误码
+
+所有 manifest 加载、调用失败以 `PluginError{pluginId, code, message}` 交换；单插件失败不影响宿主与其他插件。
+
+| 错误码 | 触发 |
+|-----|-----|
+| `INVALID_ARGUMENT` | manifest / 参数 / 返回值非法 |
+| `INCOMPATIBLE_VERSION` | schema / 宿主版本 / 平台不匹配 |
+| `PERMISSION_DENIED` | 权限未授予 |
+| `CAPABILITY_UNAVAILABLE` | 宿主版本未提供该能力 |
+| `TIMEOUT` | 超出调用预算（见 §3 / §9） |
+| `PLUGIN_EXCEPTION` | JS 异常 / panic |
+| `NETWORK_BLOCKED` | 预留（网络域名策略） |
+| `HOST_API_ERROR` | 预留（宿主 API 内部错误） |
+
+## 9. 生命周期与超时
+
+```text
+加载：读取 manifest → 校验 → 解析权限 → 创建沙箱 → 注入 ctx
+  ↓
+activate(ctx)                  2s 预算
+  ↓
+onAction（prefix live）        每次 150ms 软预算，迟到结果丢弃
+onAction（callback）           5s 预算
 ```
 
-### 可用 API
+- live 调用连续 3 次超时 → 自动禁用该插件；用户重新启用即恢复并清零计数；自动禁用不持久化，重启重新加载
+- 用户启用 / 禁用状态持久化，跨升级 / 重载保留
+- **协议不设卸载回调**：禁用 / 卸载 / 重载 / 退出时的清理由宿主负责，不依赖插件主动注销——命令索引、storage 等注册项均由宿主按插件 ID 回收或重建，沙箱 VM 直接销毁
+- 若未来扩展类型持有需释放的宿主资源（如常驻任务），停止语义由该类型自身接口契约定义，不是通用卸载回调（见 §1.1）
 
-**ctx.storage**（需要 `storage` 权限）
-```javascript
-await ctx.storage.set("key", "value");
-const value = await ctx.storage.get("key");
-await ctx.storage.delete("key");
-```
-
-**ctx.log**
-```javascript
-ctx.log.info("info message");
-ctx.log.warn("warning message");
-ctx.log.error("error message");
-```
-
-### Action 类型
-
-**open-url**：用默认浏览器（或用户设置的浏览器）打开 URL
-```javascript
-{ kind: "open-url", arg: "https://github.com" }
-```
-
-**copy**：复制文本到剪贴板
-```javascript
-{ kind: "copy", arg: "text to copy" }
-```
-
-**callback**：返回二级结果列表（用户按 Enter 时调用 `onCommand`）
-```javascript
-{ kind: "callback", arg: ["command-id", "arg1", "arg2"] }
-```
-
-## 运行时实现
-
-### goja VM 隔离
-
-- 每个插件一个独立的 goja VM
-- 每个插件一个专用的 worker goroutine
-- 外部调用通过 channel 派发到 worker
-- 超时通过 `vm.Interrupt()` 实现，VM 复用不重建
-
-### 并行搜索
-
-```go
-// 伪代码
-for plugin in plugins {
-    if plugin.HasProvider() && prefixMatches(plugin, query) {
-        go func(p) {
-            ctx, cancel := context.WithTimeout(context.Background(), 150ms)
-            results := p.rt.Search(ctx, query)
-            // 合并结果
-        }(plugin)
-    }
-}
-```
-
-### 超时处理
-
-- 搜索超时：150ms 软超时，迟到结果丢弃
-- 连续 3 次超时：自动禁用插件
-- 命令回调：5s 超时
-
-### 错误处理
-
-- JS 异常/panic → `PluginError`（带错误码）
-- 单插件错误不影响宿主
-- 错误码详见 `internal/plugin/errors.go`
-
-## 权限系统
-
-当前版本（V1）权限状态：
-
-| 权限 | 状态 | 说明 |
-|-----|------|------|
-| storage | ✅ 支持 | 声明即授权，独立 bucket |
-| network | ⏳ 保留 | 调用返回 `CAPABILITY_UNAVAILABLE` |
-| filesystem | ⏳ 保留 | 同上 |
-| shell | ⏳ 保留 | 同上 |
-| clipboard | ⏳ 保留 | 同上 |
-| secrets | ⏳ 保留 | 同上 |
-| background | ⏳ 保留 | 同上 |
-| system | ⏳ 保留 | 同上 |
-
-## 数据持久化
-
-### 使用历史
-
-- 宿主：`data.db` 的 `usages` bucket
-- 插件：`plugin:<pluginID>` bucket（string→string）
-
-### 插件状态
-
-- 启用/禁用状态：`plugins-state` bucket
-- 跨版本升级/重载持久化
-
-## 示例插件
-
-官方和社区插件详见 [插件市场](./plugin-marketplace.md)。
-
-**快速示例（Base64 编码器）：**
+## 10. 最小示例
 
 ```json
 // plugin.json
 {
-  "id": "com.example.encode",
-  "name": "Base64 Encoder",
+  "schemaVersion": 1,
+  "id": "com.example.github",
+  "version": "1.0.0",
+  "minHostVersion": "0.1.0",
   "main": "main.js",
-  "permissions": ["storage"],
   "commands": [
-    { "id": "encode.url", "title": "URL Encode" }
-  ],
-  "activationEvents": [
-    "onSearchPrefix:b64 ",
-    "onCommand:encode.url"
+    {
+      "id": "github.search",
+      "title": "GitHub Search",
+      "prefix": "gh"
+    }
   ]
 }
 ```
 
 ```javascript
 // main.js
-module.exports.provider = {
-  search: async (query, signal) => {
-    const text = query.slice(3); // 去掉 "b64 " 前缀
-    try {
-      const encoded = btoa(text);
-      return [{
-        id: "b64-result",
-        title: encoded,
-        subtitle: `Base64: ${text}`,
-        action: { kind: "copy", arg: encoded }
-      }];
-    } catch {
-      return [];
-    }
+module.exports.onAction = (actionId, args) => {
+  const query = args[0] ?? "";          // 完整查询，如 "gh kyvro"
+  if (!query.startsWith("gh ")) return [];
+  const input = query.slice(3).trim();
+  if (!input) return [];
+
+  const rows = [];
+  if (/^[\w.-]+\/[\w.-]+$/.test(input)) {
+    rows.push({
+      id: "repo",
+      title: "Open " + input + " on GitHub",
+      actions: [{ type: "open-url", url: "https://github.com/" + input }]
+    });
   }
+  rows.push({
+    id: "search",
+    title: 'Search GitHub for "' + input + '"',
+    actions: [{ type: "open-url", url: "https://github.com/search?q=" + encodeURIComponent(input) }]
+  });
+  return rows;
 };
 ```
 
-## 测试
+输入 `gh kyvro`：prefix 命中命令索引 → 每次键入调用 `onAction` → 主列表实时出现两行 → 回车打开。
 
-插件系统测试覆盖（`internal/plugin/*_test.go`）：
+## 11. 迁移与计划
 
-- Manifest 校验全矩阵
-- 版本目录选择（含 current.json 覆盖）
-- 权限解析/拒绝/不可用
-- 存储隔离与持久
-- 结果转换与非法条目丢弃
-- 超时中断与迟到结果
-- 异常转错误
-- 命令回调往返
-- activate Promise
-- LoadAll 容错
-- 前缀门控
-- 命令浮出
-- 并行合并
-- 3 次超时禁用
-- 引擎顺序断言
-- 端到端示例插件测试
+协议迁移已落地（当前代码 = 本协议）：
 
-## 限制与未来计划
+- `internal/plugin/runtime.go` / `provider.go`：`provider.search` 已删除，live 调用统一走 `onAction`
+- `internal/plugin/provider.go` / `manager.go`：关键词模糊匹配路径已删除；触发为 prefix 命令索引——加载 / 启用 / 自动禁用时全量重建，查询在索引上做最长前缀 + 词边界精确检索（索引建立/移除时机见 [index.md](./index.md) §4.4）
+- manifest：`commands[].prefix`（必需，小写归一）已生效，`keywords` / `subtitle` / `activationEvents` 已移除——`activate` 在加载时无条件执行，命令触发由 `commands[]` 派生
+- runtime：`ctx.template` 注入已移除——Text Snippets 当前下线，模板注册无消费方；功能恢复时随协议一并恢复（Text Snippets 功能描述见 [features.md](./features.md)）
+- 插件迁移完成：`com.kyvro.github`、`com.example.encode`、`com.example.datesnippet`；`com.kyvro.textsnippets` 经 feature-detect（`ctx.template` 缺席即不注册）保持可安装
+- `plugin-sdk/index.d.ts` 已同步类型定义
 
-### 当前限制
+后续计划：
 
-- 仅支持 CommonJS（不支持 ESM）
-- 不支持 TypeScript（需手动编译）
-- 插件需手动安装（见 [插件市场](./plugin-marketplace.md)）
-- 无版本升级/回滚机制
-
-### 未来计划（M2+）
-
-- ESM 支持 + esbuild 工具链
-- 插件市场 + 一键安装
+- ESM / TypeScript 编译工具链（当前仅 CommonJS）
+- Match Handler / Action Provider / Background Service / Agent Tool 四类扩展——见 §1.1
+- 权限实现扩展与 per-plugin 授权 UI——见 [permissions.md](./permissions.md#路线图)
+- 插件结果多 action 与自定义 UI
 - Secrets 管理
-- network/filesystem/shell/clipboard API
-- UI DSL（自定义界面）
-- 后台任务

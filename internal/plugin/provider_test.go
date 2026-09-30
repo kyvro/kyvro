@@ -2,6 +2,8 @@ package plugin
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,49 +22,41 @@ func TestProviderPrefixGate(t *testing.T) {
 	if len(results) != 1 || results[0].ID != "plugin:com.example.test:first" {
 		t.Fatalf("prefix hit must return live results: %+v", results)
 	}
-	if results := p.Search(context.Background(), "xx hello"); len(results) != 0 {
-		t.Fatalf("prefix miss must not invoke the provider: %+v", results)
-	}
-	if results := p.Search(context.Background(), ""); len(results) != 0 {
-		t.Fatalf("empty query must return nothing: %+v", results)
+	// Misses: wrong prefix, longer words sharing the prefix (no word
+	// boundary), and the empty query.
+	for _, q := range []string{"xx hello", "ghost", "b64x hello", ""} {
+		if results := p.Search(context.Background(), q); len(results) != 0 {
+			t.Fatalf("query %q must not invoke the plugin: %+v", q, results)
+		}
 	}
 }
 
-func TestProviderCommandSurfacing(t *testing.T) {
+func TestProviderExactPrefixHit(t *testing.T) {
 	root := t.TempDir()
-	writePluginDir(t, root, "com.example.test", "0.1.0", validManifest, fixtureJS(t, "minimal.js"))
+	writePluginDir(t, root, "com.example.test", "0.1.0", validManifest, fixtureJS(t, "basic.js"))
 	m := NewManager(root, nil, nil)
 	m.LoadAll()
 	defer m.Shutdown()
 
-	results := m.Provider().Search(context.Background(), "test")
-	if len(results) != 1 {
-		t.Fatalf("want the fuzzily matched command, got %+v", results)
-	}
-	r := results[0]
-	if r.ID != "plugin:com.example.test:cmd:test.cmd" {
-		t.Errorf("ID = %q", r.ID)
-	}
-	if r.Title != "Test Command" {
-		t.Errorf("Title = %q", r.Title)
-	}
-	a := r.PrimaryAction
-	if a.Kind != core.ActionPlugin || a.PluginID != "com.example.test" || a.ActionID != "test.cmd" {
-		t.Errorf("action = %+v", a)
-	}
-	if len(a.Args) != 1 || a.Args[0] != "test" {
-		t.Errorf("args = %v (query must be forwarded)", a.Args)
+	results := m.Provider().Search(context.Background(), "b64")
+	if len(results) != 1 || results[0].Title != "P:b64" {
+		t.Fatalf("bare prefix must hit the index: %+v", results)
 	}
 }
 
-func TestProviderNoActivationEventsNeverSearched(t *testing.T) {
+// leakJS returns a plugin whose onAction answers every call with one LEAK
+// row — any LEAK row in a search proves the plugin was invoked.
+func leakJS() string {
+	return `module.exports = {onAction:function(){ return [{id:"leak",title:"LEAK",actions:[{type:"copy",value:"x"}]}] }}`
+}
+
+func TestProviderNoCommandsNeverSearched(t *testing.T) {
 	root := t.TempDir()
-	// The JS would return a result for any query; without an
-	// onSearchPrefix event the provider must never be called.
-	always := `module.exports = {provider:{search:function(q){ return [{id:"leak",title:"LEAK",actions:[{type:"copy",value:"x"}]}] }}}`
+	// The JS would return a result for any call; without commands the
+	// plugin never joins the command index and must never be invoked.
 	mm := manifestMap(t, validManifest)
-	delete(mm, "activationEvents")
-	writePluginDir(t, root, "com.example.test", "0.1.0", string(marshal(t, mm)), always)
+	delete(mm, "commands")
+	writePluginDir(t, root, "com.example.test", "0.1.0", string(marshal(t, mm)), leakJS())
 	m := NewManager(root, nil, nil)
 	m.LoadAll()
 	defer m.Shutdown()
@@ -70,27 +64,74 @@ func TestProviderNoActivationEventsNeverSearched(t *testing.T) {
 	for _, q := range []string{"anything", "b64 x", "test"} {
 		for _, r := range m.Provider().Search(context.Background(), q) {
 			if r.Title == "LEAK" {
-				t.Fatalf("provider without activationEvents was searched (q=%q)", q)
+				t.Fatalf("plugin without commands was searched (q=%q)", q)
 			}
 		}
 	}
 }
 
-func TestProviderParallelMergeOrder(t *testing.T) {
+// prefixManifestFor builds a minimal one-command manifest with the given
+// trigger prefix.
+func prefixManifestFor(id, prefix string) string {
+	return fmt.Sprintf(`{"schemaVersion":1,"id":%q,"version":"0.1.0","main":"index.js","minHostVersion":"0.1.0","commands":[{"id":"cmd","prefix":%q}]}`, id, prefix)
+}
+
+// echoJS returns a plugin that titles its row with its own plugin id and
+// the full query, so tests can see which plugin answered.
+func echoJS(id string) string {
+	return fmt.Sprintf(`module.exports = {onAction:function(i,a){ return [{id:"r",title:%q+":"+(a&&a[0]||""),actions:[{type:"copy",value:"v"}]}] }}`, id)
+}
+
+func TestProviderLongestPrefixWins(t *testing.T) {
 	root := t.TempDir()
-	// Two prefix plugins returning one row each; results must merge in
-	// plugin-id order regardless of goroutine completion order.
-	js := `module.exports = {provider:{search:function(q){ return [{id:"r",title:module.id||"?",actions:[{type:"copy",value:"v"}]}] }}}`
-	for _, id := range []string{"com.example.a", "com.example.b"} {
-		writePluginDir(t, root, id, "0.1.0", manifestFor(id), js)
-	}
+	writePluginDir(t, root, "com.example.a", "0.1.0", prefixManifestFor("com.example.a", "gh"), echoJS("a"))
+	writePluginDir(t, root, "com.example.b", "0.1.0", prefixManifestFor("com.example.b", "ghs"), echoJS("b"))
 	m := NewManager(root, nil, nil)
 	m.LoadAll()
 	defer m.Shutdown()
 
-	results := m.Provider().Search(context.Background(), "b64 x")
-	if len(results) != 2 {
-		t.Fatalf("want results from both plugins, got %+v", results)
+	results := m.Provider().Search(context.Background(), "ghs x")
+	if len(results) != 1 || results[0].ID != "plugin:com.example.b:r" {
+		t.Fatalf("longest prefix must win: %+v", results)
+	}
+	results = m.Provider().Search(context.Background(), "gh x")
+	if len(results) != 1 || results[0].ID != "plugin:com.example.a:r" {
+		t.Fatalf("shorter prefix must serve its own query: %+v", results)
+	}
+}
+
+func TestProviderPrefixConflictKeepsFirst(t *testing.T) {
+	root := t.TempDir()
+	writePluginDir(t, root, "com.example.a", "0.1.0", prefixManifestFor("com.example.a", "dup"), echoJS("a"))
+	writePluginDir(t, root, "com.example.b", "0.1.0", prefixManifestFor("com.example.b", "dup"), echoJS("b"))
+	m := NewManager(root, nil, nil)
+	m.LoadAll()
+	defer m.Shutdown()
+
+	results := m.Provider().Search(context.Background(), "dup x")
+	if len(results) != 1 || results[0].ID != "plugin:com.example.a:r" {
+		t.Fatalf("conflict must resolve to the lowest plugin id: %+v", results)
+	}
+}
+
+func TestProviderDisableRemovesPrefix(t *testing.T) {
+	root := t.TempDir()
+	writePluginDir(t, root, "com.example.test", "0.1.0", validManifest, fixtureJS(t, "basic.js"))
+	m := NewManager(root, nil, nil)
+	m.LoadAll()
+	defer m.Shutdown()
+
+	if err := m.SetEnabled("com.example.test", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Provider().Search(context.Background(), "b64 x"); len(got) != 0 {
+		t.Fatalf("disabled plugin must leave the index: %+v", got)
+	}
+	if err := m.SetEnabled("com.example.test", true); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Provider().Search(context.Background(), "b64 x"); len(got) != 1 {
+		t.Fatalf("re-enabling must restore the index: %+v", got)
 	}
 }
 
@@ -114,7 +155,7 @@ func TestProviderThreeStrikesDisables(t *testing.T) {
 	if !disabled {
 		t.Fatal("plugin must be disabled after 3 consecutive timeouts")
 	}
-	// Removed from rotation and refused actions; flagged as auto-disabled.
+	// Removed from the index and refused actions; flagged as auto-disabled.
 	if got := p.Search(context.Background(), "b64 x"); len(got) != 0 {
 		t.Fatalf("disabled plugin still searched: %+v", got)
 	}
@@ -129,7 +170,7 @@ func TestProviderThreeStrikesDisables(t *testing.T) {
 			t.Fatalf("want auto-disabled flag, got %+v", info)
 		}
 	}
-	// Re-enabling clears strikes and restores rotation. (The fixture still
+	// Re-enabling clears strikes and restores the index. (The fixture still
 	// spins forever, so observability here is the strike reset plus the
 	// enabled flag.)
 	if err := m.SetEnabled("com.example.test", true); err != nil {
@@ -181,5 +222,8 @@ func TestEngineIntegrationPluginOrder(t *testing.T) {
 	}
 	if results[2].ID != "web:q" {
 		t.Errorf("web fallback must stay last, got %+v", results)
+	}
+	if strings.HasPrefix(results[1].ID, "plugin:com.example.test:cmd:") {
+		t.Errorf("command rows must come from live calls, not surfacing: %+v", results[1])
 	}
 }

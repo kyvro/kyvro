@@ -8,29 +8,30 @@
  * @type {import("../index").Plugin}
  */
 module.exports = {
-  provider: {
-    /**
-     * Live search; invoked only while the query starts with a prefix
-     * declared in activationEvents ("onSearchPrefix:..."). Receives the
-     * FULL query including the prefix. Keep fast (~150ms budget).
-     *
-     * @param {string} query - full query including the trigger prefix
-     */
-    search(query) {
-      const term = query.replace(/^\S+\s*/, "");
-      return term
-        ? [{
-            id: "copy-term",
-            title: "Copy " + term,
-            actions: [{ type: "copy", value: term }]
-          }]
-        : [];
-    }
+  /**
+   * Only business entry. Live prefix hits are invoked on every keystroke
+   * while the query starts with a declared command prefix ("demo"); the
+   * FULL query including the prefix arrives as args[0]. Keep fast
+   * (~150ms budget). Callback actions arrive with the action's own args.
+   *
+   * @param {string} actionId - command id (live) or callback action id
+   * @param {string[]} args - [fullQuery] for live hits, action args otherwise
+   */
+  onAction(actionId, args) {
+    const query = String(args[0] ?? "");
+    const term = query.replace(/^\S+\s*/, "");
+    return term
+      ? [{
+          id: "copy-term",
+          title: "Copy " + term,
+          actions: [{ type: "copy", value: term }]
+        }]
+      : [];
   },
 
   /**
-   * Optional init hook (~2s budget). Typical use: storage warm-up,
-   * template registrations under "onStartup".
+   * Optional init hook (~2s budget) and the only lifecycle callback — there
+   * is no unload/deactivate hook. Typical use: storage warm-up.
    *
    * @param {import("../index").PluginContext} ctx
    */

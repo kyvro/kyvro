@@ -10,8 +10,8 @@ import (
 	"kyvro/internal/core"
 )
 
-// validManifest is a complete, valid manifest for com.example.test with a
-// b64 search prefix and one command.
+// validManifest is a complete, valid manifest for com.example.test with one
+// prefix command ("b64").
 const validManifest = `{
   "schemaVersion": 1,
   "id": "com.example.test",
@@ -19,9 +19,8 @@ const validManifest = `{
   "version": "0.1.0",
   "main": "index.js",
   "minHostVersion": "0.1.0",
-  "activationEvents": ["onSearchPrefix:b64", "onCommand:test.cmd"],
   "permissions": ["storage"],
-  "commands": [{"id": "test.cmd", "title": "Test Command", "keywords": ["test"]}]
+  "commands": [{"id": "test.cmd", "title": "Test Command", "prefix": "b64"}]
 }`
 
 // manifestFor rewrites the plugin id in validManifest.

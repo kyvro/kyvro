@@ -33,34 +33,29 @@ type Author struct {
 	URL  string `json:"url,omitempty"`
 }
 
-// Command is a statically declared command (spec §4).
+// Command is a statically declared command (plugins.md §2.3). Its prefix
+// joins the host command index; while the query starts with it the plugin's
+// onAction is live-called with the command id as the actionId.
 type Command struct {
-	ID       string   `json:"id"`
-	Title    string   `json:"title"`
-	Subtitle string   `json:"subtitle,omitempty"`
-	Keywords []string `json:"keywords,omitempty"`
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Prefix string `json:"prefix"`
 }
 
 // Manifest is the parsed plugin.json.
 type Manifest struct {
-	SchemaVersion    int       `json:"schemaVersion"`
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	Version          string    `json:"version"`
-	Description      string    `json:"description,omitempty"`
-	Author           *Author   `json:"author,omitempty"`
-	Main             string    `json:"main"`
-	Icon             string    `json:"icon,omitempty"`
-	MinHostVersion   string    `json:"minHostVersion"`
-	Platforms        []string  `json:"platforms,omitempty"`
-	ActivationEvents []string  `json:"activationEvents,omitempty"`
-	Permissions      []string  `json:"permissions,omitempty"`
-	Commands         []Command `json:"commands,omitempty"`
-
-	// SearchPrefixes and CommandEvents are derived from ActivationEvents
-	// at parse time for fast lookup by the provider.
-	SearchPrefixes  []string
-	CommandEventIDs map[string]bool
+	SchemaVersion  int       `json:"schemaVersion"`
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	Version        string    `json:"version"`
+	Description    string    `json:"description,omitempty"`
+	Author         *Author   `json:"author,omitempty"`
+	Main           string    `json:"main"`
+	Icon           string    `json:"icon,omitempty"`
+	MinHostVersion string    `json:"minHostVersion"`
+	Platforms      []string  `json:"platforms,omitempty"`
+	Permissions    []string  `json:"permissions,omitempty"`
+	Commands       []Command `json:"commands,omitempty"`
 }
 
 // ParseManifest decodes and validates manifest bytes. Validation failures
@@ -102,6 +97,7 @@ func ParseManifest(data []byte) (*Manifest, error) {
 	}
 
 	commandIDs := make(map[string]bool, len(m.Commands))
+	prefixes := make(map[string]bool, len(m.Commands))
 	for i, c := range m.Commands {
 		if c.ID == "" {
 			return nil, Errorf(m.ID, ErrInvalidArgument, "commands[%d].id is empty", i)
@@ -110,6 +106,16 @@ func ParseManifest(data []byte) (*Manifest, error) {
 			return nil, Errorf(m.ID, ErrInvalidArgument, "duplicate command id %q", c.ID)
 		}
 		commandIDs[c.ID] = true
+		if strings.TrimSpace(c.Prefix) == "" {
+			return nil, Errorf(m.ID, ErrInvalidArgument,
+				"commands[%d] (%s) prefix is required and must not be empty", i, c.ID)
+		}
+		m.Commands[i].Prefix = strings.ToLower(strings.TrimSpace(c.Prefix))
+		if prefixes[m.Commands[i].Prefix] {
+			return nil, Errorf(m.ID, ErrInvalidArgument,
+				"duplicate command prefix %q", m.Commands[i].Prefix)
+		}
+		prefixes[m.Commands[i].Prefix] = true
 		if c.Title == "" {
 			m.Commands[i].Title = c.ID
 		}
@@ -118,43 +124,7 @@ func ParseManifest(data []byte) (*Manifest, error) {
 		m.Name = m.ID
 	}
 
-	prefixes, err := parseActivationEvents(&m, commandIDs)
-	if err != nil {
-		return nil, err
-	}
-	m.SearchPrefixes = prefixes
-	m.CommandEventIDs = commandIDs
 	return &m, nil
-}
-
-// parseActivationEvents validates activationEvents and returns the
-// onSearchPrefix prefixes. onCommand events must reference declared commands.
-func parseActivationEvents(m *Manifest, commandIDs map[string]bool) ([]string, error) {
-	var prefixes []string
-	for i, ev := range m.ActivationEvents {
-		switch {
-		case ev == "onStartup":
-			// Plugin wants to be activated on startup (for template functions, etc.)
-			// No validation needed, just allow it
-		case strings.HasPrefix(ev, "onCommand:"):
-			id := strings.TrimPrefix(ev, "onCommand:")
-			if !commandIDs[id] {
-				return nil, Errorf(m.ID, ErrInvalidArgument,
-					"activationEvents[%d] %q references an undeclared command", i, ev)
-			}
-		case strings.HasPrefix(ev, "onSearchPrefix:"):
-			pfx := strings.TrimPrefix(ev, "onSearchPrefix:")
-			if pfx == "" {
-				return nil, Errorf(m.ID, ErrInvalidArgument,
-					"activationEvents[%d] %q has an empty prefix", i, ev)
-			}
-			prefixes = append(prefixes, strings.ToLower(pfx))
-		default:
-			return nil, Errorf(m.ID, ErrInvalidArgument,
-				"activationEvents[%d] %q is not a known activation event", i, ev)
-		}
-	}
-	return prefixes, nil
 }
 
 // validateRelPath enforces a relative, non-escaping path for a manifest
@@ -184,9 +154,38 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// currentPin is the content of current.json (spec §11).
+// Install source markers persisted in current.json (docs/plugin-marketplace.md
+// 「安装来源与自动升级」): market installs are auto-upgraded, local installs
+// (offline import / manual copy) are user-managed and never auto-touched.
+const (
+	SourceMarket = "market"
+	SourceLocal  = "local"
+)
+
+// currentPin is the content of current.json (spec §11). An empty Source is
+// read as SourceLocal (manual directory copies carry no pin at all).
 type currentPin struct {
 	Version string `json:"version"`
+	Source  string `json:"source,omitempty"`
+}
+
+// ReadCurrentPin reads the pin of an installed plugin (dir = <root>/<id>).
+// ok is false when the file is absent or unparseable.
+func ReadCurrentPin(pluginDir string) (currentPin, bool) {
+	data, err := os.ReadFile(filepath.Join(pluginDir, CurrentFile))
+	if err != nil {
+		return currentPin{}, false
+	}
+	var pin currentPin
+	if json.Unmarshal(data, &pin) != nil {
+		return currentPin{}, false
+	}
+	return pin, true
+}
+
+// VersionNewer reports whether SemVer a is strictly newer than b.
+func VersionNewer(a, b string) bool {
+	return semver.Compare("v"+a, "v"+b) > 0
 }
 
 // ResolveVersionDir picks the code directory for a plugin installed at

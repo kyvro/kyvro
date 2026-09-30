@@ -52,23 +52,11 @@ export interface PluginManifest {
   minHostVersion: string;
   /** When present, must contain the host GOOS (`darwin` | `windows` | `linux`). */
   platforms?: Platform[];
-  activationEvents?: ActivationEvent[];
   permissions?: Permission[];
   commands?: ManifestCommand[];
 }
 
 export type Platform = "darwin" | "windows" | "linux";
-
-/**
- * - `"onStartup"` — activated when the app starts (template registrations).
- * - `` `onSearchPrefix:${string}` `` — joins the search rotation while the
- *   query starts with the (lowercased, non-empty) prefix.
- * - `` `onCommand:${string}` `` — must reference a declared command id.
- */
-export type ActivationEvent =
-  | "onStartup"
-  | `onSearchPrefix:${string}`
-  | `onCommand:${string}`;
 
 /**
  * Permission `<capability>` or `<capability>:<scope>`. V1 implements only
@@ -87,18 +75,20 @@ export type Permission =
   | "background";
 
 /**
- * Statically declared command; surfaced by the host through fuzzy matching
- * over Title+Keywords without invoking JS. On Enter it re-enters the plugin
- * via `onAction(id, args)` with the whole query as the single element of
- * `args`.
+ * Statically declared command — the only extension type. `prefix` joins the
+ * host command index (lowercased, duplicates within one manifest rejected);
+ * while the query starts with the prefix at a word boundary ("gh" matches
+ * "gh x" and bare "gh", never "ghost"), the host live-calls `onAction` with
+ * this command's `id` as the actionId and the FULL query as the single
+ * element of `args`.
  */
 export interface ManifestCommand {
-  /** Unique within the manifest; referenced by `onCommand:<id>`. */
+  /** Unique within the manifest; used as the `onAction` actionId. */
   id: string;
-  /** Defaults to `id` when omitted. */
+  /** Display name (settings UI); defaults to `id`. */
   title?: string;
-  subtitle?: string;
-  keywords?: string[];
+  /** Trigger prefix; required. Matched case-insensitively. */
+  prefix: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -106,8 +96,8 @@ export interface ManifestCommand {
 /* ------------------------------------------------------------------ */
 
 /**
- * One row returned by `provider.search` / `onAction`. Rendered with the
- * manifest icon; effective ID becomes `plugin:<pluginId>:<rowId>`.
+ * One row returned by `onAction`. Rendered with the manifest icon;
+ * effective ID becomes `plugin:<pluginId>:<rowId>`.
  *
  * Entries missing `id`, `title`, or valid `actions` are silently dropped
  * (host logs the count) — they are never shown and never crash the app.
@@ -116,7 +106,7 @@ export interface ResultRow {
   id: string;
   title: string;
   subtitle?: string;
-  /** Soft ranking hint clamped to `0..50`; fuzzy match quality still dominates ordering. */
+  /** Soft ranking hint clamped to `0..50`; relevance still dominates ordering. */
   scoreHint?: number;
   /** Non-empty; the FIRST action runs on Enter and it must be valid or the whole row is dropped. */
   actions: [PluginAction, ...PluginAction[]];
@@ -147,28 +137,24 @@ export type PluginAction =
 
 /**
  * The shape of `module.exports` expected by the host loader; all members
- * optional. Without `provider.search` the plugin participates only via
- * manifest commands and `activate()`.
+ * optional. `onAction` is the single business entry for both call sources
+ * (the host distinguishes them by timing and budget, not by id).
  */
 export interface Plugin {
   /**
-   * Live search. Receives the FULL query including the prefix (`"gh vim"`
-   * arrives as-is); gate on the prefix yourself like the official GitHub
-   * plugin. Runs only while the query matches one of the declared
-   * `onSearchPrefix:` activation events. Keep fast — ~150ms budget before
-   * abandonment, and three consecutive timeout strikes auto-disable the
-   * plugin until it is re-enabled.
-   */
-  provider?: {
-    search(
-      query: string
-    ): MaybePromise<ResultRow[]> | undefined;
-  };
-  /**
-   * Callback entry point: invoked for `"callback"` actions and activated
-   * manifest commands (commands forward the whole query as the single
-   * element of `args`). Returning non-array values is treated as an error
-   * by the host.
+   * Only business entry. Two call sources:
+   *
+   * - **prefix hit (live)**: called on EVERY keystroke while the query
+   *   matches a declared command prefix; actionId is that command's `id`
+   *   and `args` is `[fullQuery]` (e.g. `"gh vim"` arrives as-is — gate and
+   *   slice the prefix yourself like the official GitHub plugin). Budget
+   *   ~150ms; late results are dropped, and three consecutive timeout
+   *   strikes auto-disable the plugin until it is re-enabled.
+   * - **callback action**: called once when the user runs a `"callback"`
+   *   action; actionId is the action's `id` and `args` is the action's
+   *   `args ?? []`. Budget ~5s; rows open in the secondary list.
+   *
+   * Returning non-array values is treated as an error by the host.
    */
   onAction?(
     actionId: string,
@@ -176,8 +162,9 @@ export interface Plugin {
   ): MaybePromise<ResultRow[]>;
   /**
    * Optional init hook run once at load (~2s budget, awaited Promise
-   * included). Typical use: `ctx.storage` warm-up, `ctx.template`
-   * registrations.
+   * included). Typical use: `ctx.storage` warm-up. This is the only
+   * lifecycle callback — there is no unload/deactivate hook; cleanup on
+   * disable/uninstall/reload is host-side.
    */
   activate?(ctx: PluginContext): void | Promise<void>;
 }
@@ -195,8 +182,6 @@ export interface PluginContext {
   storage?: PluginStorage;
   /** Host logger; entries land in the application log as `plugin <id> [<level>]: …`. */
   log: LogAPI;
-  /** Snippet-template function registration (Text Snippets feature). */
-  template: TemplateAPI;
 }
 
 /**
@@ -216,15 +201,4 @@ export interface LogAPI {
   info(...parts: unknown[]): void;
   warn(...parts: unknown[]): void;
   error(...parts: unknown[]): void;
-}
-
-/**
- * Registers snippet-template functions resolvable as `${name("a","b")}` in
- * template strings (Text Snippets feature). Register during `"onStartup"`;
- * re-registering a name replaces the previous function. The handler runs
- * synchronously: returning empty/undefined renders `""`, a thrown error
- * renders `[ERROR: …]` in place.
- */
-export interface TemplateAPI {
-  registerFunc(name: string, fn: (...args: string[]) => string): void;
 }

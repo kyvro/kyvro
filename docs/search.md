@@ -2,7 +2,7 @@
 
 ## 1. 文档目标
 
-本文档定义 Kyvro 核心搜索模块的下一阶段升级规格。内容基于 `docs/original/search.md`，并对照当前代码库实现校准。
+本文档定义 Kyvro 核心搜索模块的升级规格。内容基于 `docs/original/search.md`，并对照当前代码库实现校准。**本规格已实现落地**，已交付行为以 [features.md](./features.md) 为准；文中"当前基线"章节描述升级前的历史状态，仅作对照保留。
 
 文档分工：本文负责搜索架构、Result / Action 模型、Folder 搜索语义、Engine 语义、Service API、平台与 UI 要求；索引分类、存储布局、扫描时机与建立/更新流程由 [index.md](./index.md) 负责，两文以引用互链。
 
@@ -437,27 +437,13 @@ tie-break by Title ascending
 
 ## 12. Service API
 
-当前绑定方法：
+绑定方法（本规格落地后；原 `Launch` / `RunAction` 已删除，前端一次性迁移到 `Execute`）：
 
 - `Search(query string) ([]core.SearchResult, error)`
-- `Launch(id string) error`
-- `RunAction(id string) ([]core.SearchResult, error)`
+- `Execute(id string, actionID string) ([]core.SearchResult, error)`
+- `FolderSources()` / `AddFolderSource(path, maxDepth)` / `RemoveFolderSource(id)` / `SetFolderSourceEnabled(id, enabled)` / `RefreshFolderSource(id)` / `RefreshAllFolderSources()` / `PickFolderSourcePath()`
 
-目标新增：
-
-- 给 settings UI 使用的 Folder source 管理方法。
-- 通用 Action 执行入口。
-
-建议 service 方法：
-
-```go
-func (s *SearchService) FolderSources() ([]core.FolderSource, error)
-func (s *SearchService) AddFolderSource(path string, maxDepth int) (core.FolderSource, error)
-func (s *SearchService) RemoveFolderSource(id string) error
-func (s *SearchService) SetFolderSourceEnabled(id string, enabled bool) error
-func (s *SearchService) RefreshFolderSource(id string) error
-func (s *SearchService) Execute(id string, actionID string) ([]core.SearchResult, error)
-```
+其中 Folder source 管理方法供 settings UI 使用，`Execute` 为通用 Action 执行入口。
 
 Settings 页如果需要原生目录选择器，可额外提供：
 
@@ -467,7 +453,7 @@ func (s *SearchService) PickFolderSourcePath() (string, error)
 
 该方法只负责打开系统目录选择器并返回路径，不写入配置、不触发扫描。实际添加仍通过 `AddFolderSource(path, maxDepth)` 完成，便于测试和手动输入路径复用同一条逻辑。
 
-`Launch(id)` 可以继续作为执行 primary action 的兼容 wrapper。`RunAction(id)` 可以在前端迁移完成前继续承载插件二级视图。
+`Launch(id)` / `RunAction(id)` 兼容 wrapper 已按计划在迁移完成后删除，执行统一收敛到 `Execute(id, actionID)`。
 
 插件结果在本次升级中暂时只接入 `PrimaryAction`。当前插件转换逻辑只保留第一个合法 action 作为 primary，本次不扩展插件 API 的多 action 语义。`Actions []ActionItem` 先服务 Core 一等结果，例如 Folder；后续插件 API 升级时，再允许插件结果填充同一套 `Actions`。
 

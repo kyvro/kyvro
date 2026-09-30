@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"sort"
 	"sync"
 	"time"
 
@@ -174,6 +173,11 @@ func (s *SearchService) ServiceStartup(ctx context.Context, _ application.Servic
 		s.engine = engine
 		s.pathOpener = platform.NewPathOpener()
 		s.folderCtl = folderCtl
+
+		// Market-source plugins auto-upgrade in the background; the fetch
+		// also performs the incremental lastUpdated check and warms the
+		// local registry cache. Never blocks startup or search.
+		go s.autoUpgradePlugins()
 
 		// TODO(snippets): disabled together with the feature — see the field
 		// comments on SearchService and the block above in ServiceStartup.
@@ -510,6 +514,41 @@ func (s *SearchService) AvailablePlugins() ([]kyvroplugin.RemotePlugin, error) {
 	return registry.FetchPlugins()
 }
 
+// ImportPluginZip opens a native zip picker (offline import), installs the
+// archive into the plugins directory and hot-reloads. It returns the
+// imported plugin ID; a cancelled dialog returns ("", nil).
+func (s *SearchService) ImportPluginZip() (string, error) {
+	if s.installer == nil {
+		return "", fmt.Errorf("plugin installer not initialized")
+	}
+	app := application.Get()
+	if app == nil || app.Dialog == nil {
+		return "", fmt.Errorf("dialog unavailable")
+	}
+	zipPath, err := app.Dialog.OpenFile().
+		CanChooseFiles(true).
+		CanChooseDirectories(false).
+		CanCreateDirectories(false).
+		SetTitle("Import Plugin").
+		AddFilter("Plugin archive", "*.zip").
+		PromptForSingleSelection()
+	if err != nil {
+		return "", fmt.Errorf("pick plugin archive: %w", err)
+	}
+	if zipPath == "" {
+		return "", nil // user cancelled
+	}
+	manifest, err := s.installer.InstallFromZipFile(zipPath, kyvroplugin.SourceLocal)
+	if err != nil {
+		return "", fmt.Errorf("import plugin: %w", err)
+	}
+	// Hot-reload so the imported plugin is searchable without a restart.
+	if s.mgr != nil {
+		s.mgr.LoadAll()
+	}
+	return manifest.ID, nil
+}
+
 // InstallPlugin installs a plugin from the official registry by ID.
 func (s *SearchService) InstallPlugin(id string) error {
 	if s.installer == nil {
@@ -547,6 +586,12 @@ func (s *SearchService) UninstallPlugin(id string) error {
 		return fmt.Errorf("uninstall plugin: %w", err)
 	}
 
+	// Drop the persisted disable flag so reinstalling the plugin later
+	// (market or offline import) loads enabled.
+	if s.mgr != nil {
+		s.mgr.ClearDisabledState(id)
+	}
+
 	// Reload to update the plugin list
 	if s.mgr != nil {
 		s.mgr.LoadAll()
@@ -555,76 +600,45 @@ func (s *SearchService) UninstallPlugin(id string) error {
 	return nil
 }
 
-// AllPlugins combines installed and available plugins for the settings UI.
-func (s *SearchService) AllPlugins() ([]kyvroplugin.PluginInfo, error) {
-	if s.mgr == nil || s.installer == nil {
-		return nil, fmt.Errorf("plugin system not initialized")
+// autoUpgradePlugins upgrades market-source plugins in the background
+// (docs/plugin-marketplace.md「安装来源与自动升级」): for every installed
+// plugin whose pin source is market, install the newest registry version
+// compatible with this host when it is strictly newer than the active
+// version. local plugins are never touched; a failed upgrade keeps the old
+// version and pin, so the active install is the natural rollback.
+func (s *SearchService) autoUpgradePlugins() {
+	if s.installer == nil || s.mgr == nil {
+		return
 	}
-
-	// Get installed plugins
-	installed := make(map[string]kyvroplugin.PluginInfo)
-	for _, p := range s.mgr.ListPlugins() {
-		installed[p.ID] = p
-	}
-
-	// Get available plugins from registry
-	registry := kyvroplugin.NewRegistryClient()
-	available, err := registry.FetchPlugins()
+	available, err := kyvroplugin.NewRegistryClient().FetchPlugins()
 	if err != nil {
-		log.Printf("plugin: fetch available plugins: %v", err)
-		// Return only installed plugins on registry fetch failure
-		result := make([]kyvroplugin.PluginInfo, 0, len(installed))
-		for _, p := range installed {
-			result = append(result, p)
+		log.Printf("plugin: auto-upgrade: fetch registry: %v", err)
+		return
+	}
+	byID := make(map[string]kyvroplugin.RemotePlugin, len(available))
+	for _, rp := range available {
+		byID[rp.ID] = rp
+	}
+
+	upgraded := false
+	for _, info := range s.mgr.ListPlugins() {
+		if info.Source != kyvroplugin.SourceMarket {
+			continue
 		}
-		return result, nil
-	}
-
-	// Merge installed and available plugins
-	pluginMap := make(map[string]kyvroplugin.PluginInfo)
-
-	// Add installed plugins
-	for id, p := range installed {
-		pluginMap[id] = p
-	}
-
-	// Add available plugins that aren't installed
-	for _, remote := range available {
-		if _, exists := installed[remote.ID]; !exists {
-			pluginMap[remote.ID] = kyvroplugin.PluginInfo{
-				ID:          remote.ID,
-				Name:        remote.Name,
-				Version:     remote.Version,
-				Description: remote.Description,
-				Author:      remote.Author,
-				IconURL:     remote.IconURL,
-				Status:      kyvroplugin.StatusNotInstalled,
-				DownloadURL: remote.DownloadURL,
-			}
+		remote, ok := byID[info.ID]
+		if !ok || remote.Version == "" || !kyvroplugin.VersionNewer(remote.Version, info.Version) {
+			continue
 		}
-	}
-
-	// Convert map to slice and sort
-	result := make([]kyvroplugin.PluginInfo, 0, len(pluginMap))
-	for _, p := range pluginMap {
-		result = append(result, p)
-	}
-
-	// Sort by status (enabled first, then installed, then not installed) and by name
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].Status != result[j].Status {
-			// Order: Enabled > Installed > NotInstalled
-			statusOrder := map[kyvroplugin.PluginStatus]int{
-				kyvroplugin.StatusEnabled:      0,
-				kyvroplugin.StatusInstalled:    1,
-				kyvroplugin.StatusNotInstalled: 2,
-			}
-			return statusOrder[result[i].Status] < statusOrder[result[j].Status]
+		if err := s.installer.InstallRemote(&remote); err != nil {
+			log.Printf("plugin: auto-upgrade %s: %v (keeping %s)", info.ID, err, info.Version)
+			continue
 		}
-		return result[i].Name < result[j].Name
-	})
-
-	return result, nil
+		log.Printf("plugin: auto-upgraded %s %s -> %s", info.ID, info.Version, remote.Version)
+		upgraded = true
+	}
+	if upgraded {
+		s.mgr.LoadAll()
+	}
 }
 
 // Snippets methods

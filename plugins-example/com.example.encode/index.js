@@ -1,11 +1,13 @@
 // Kyvro example plugin: base64 + URL encode/decode.
 //
 // Protocol: CommonJS (module.exports) — the V1 host runs goja, which has no
-// ESM support. Entries: activate(ctx), optional deactivate(), optional
-// provider.search(query), onAction(actionId, args).
+// ESM support. Exports: activate(ctx), onAction(actionId, args).
 //
-// ctx.storage is only present because the manifest declares the "storage"
-// permission; ctx.log.{info,warn,error} is always available.
+// Two prefix commands: "b64 <text>" (live base64 encode/decode rows) and
+// "url <text>" (live URL encode/decode rows). The host routes a query to
+// onAction only while it matches a declared prefix; the full query arrives
+// as args[0]. ctx.storage is only present because the manifest declares the
+// "storage" permission; ctx.log.{info,warn,error} is always available.
 
 var B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -79,6 +81,54 @@ function inputAfter(query, words) {
   return rest.trim();
 }
 
+function b64Rows(text) {
+  if (!text) return [];
+  var rows = [
+    {
+      id: "encode",
+      title: base64Encode(text),
+      subtitle: "Base64 of " + text + " · Enter to copy",
+      scoreHint: 30,
+      actions: [{ type: "copy", value: base64Encode(text) }]
+    }
+  ];
+  if (/^[A-Za-z0-9+/]+={0,2}$/.test(text) && text.length % 4 === 0 && base64Decode(text)) {
+    rows.push({
+      id: "decode",
+      title: base64Decode(text),
+      subtitle: "Base64-decoded · Enter to copy",
+      scoreHint: 25,
+      actions: [{ type: "copy", value: base64Decode(text) }]
+    });
+  }
+  return rows;
+}
+
+function urlRows(input) {
+  var rows = [
+    {
+      id: "url-encode",
+      title: encodeURIComponent(input),
+      subtitle: "URL-encoded " + input + " · Enter to copy",
+      actions: [{ type: "copy", value: encodeURIComponent(input) }]
+    }
+  ];
+  try {
+    var decoded = decodeURIComponent(input);
+    if (decoded !== input) {
+      rows.push({
+        id: "url-decode",
+        title: decoded,
+        subtitle: "URL-decoded · Enter to copy",
+        actions: [{ type: "copy", value: decoded }]
+      });
+    }
+  } catch (e) {
+    // not URL-encoded input; skip the decode row
+  }
+  return rows;
+}
+
 module.exports = {
   activate: function (ctx) {
     activations = String((parseInt(ctx.storage.get("activations") || "0", 10) || 0) + 1);
@@ -86,64 +136,16 @@ module.exports = {
     ctx.log.info("activated " + activations + " time(s)");
   },
 
-  provider: {
-    id: "encode.b64",
-    search: function (query) {
-      // The host only routes "b64…"-prefixed queries here; keep the guard
-      // so the plugin stays correct standalone.
-      if (query.indexOf("b64") !== 0) return [];
-      var text = query.slice(3).trim();
-      if (!text) return [];
-
-      var rows = [
-        {
-          id: "encode",
-          title: base64Encode(text),
-          subtitle: "Base64 of " + text + " · Enter to copy",
-          scoreHint: 30,
-          actions: [{ type: "copy", value: base64Encode(text) }]
-        }
-      ];
-      if (/^[A-Za-z0-9+/]+={0,2}$/.test(text) && text.length % 4 === 0 && base64Decode(text)) {
-        rows.push({
-          id: "decode",
-          title: base64Decode(text),
-          subtitle: "Base64-decoded · Enter to copy",
-          scoreHint: 25,
-          actions: [{ type: "copy", value: base64Decode(text) }]
-        });
-      }
-      return rows;
-    }
-  },
-
   onAction: function (actionId, args) {
-    if (actionId !== "encode.url") return [];
-    // V1 forwards the triggering query as args[0]; strip the command words
-    // to recover the text to encode (default to a demo value).
-    var input = inputAfter(String((args && args[0]) || ""), ["url", "encode"]) || "hello world";
-
-    var rows = [
-      {
-        id: "url-encode",
-        title: encodeURIComponent(input),
-        subtitle: "URL-encoded " + input + " · Enter to copy",
-        actions: [{ type: "copy", value: encodeURIComponent(input) }]
-      }
-    ];
-    try {
-      var decoded = decodeURIComponent(input);
-      if (decoded !== input) {
-        rows.push({
-          id: "url-decode",
-          title: decoded,
-          subtitle: "URL-decoded · Enter to copy",
-          actions: [{ type: "copy", value: decoded }]
-        });
-      }
-    } catch (e) {
-      // not URL-encoded input; skip the decode row
+    // The full query arrives as args[0], prefix included; strip it to
+    // recover the text to convert.
+    var query = String((args && args[0]) || "");
+    if (actionId === "encode.b64") return b64Rows(query.replace(/^b64\s*/i, ""));
+    if (actionId === "encode.url") {
+      var input = inputAfter(query, ["url"]);
+      if (!input) return [];
+      return urlRows(input);
     }
-    return rows;
+    return [];
   }
 };

@@ -4,6 +4,7 @@ import {
   Browsers,
   ExternalBrowser,
   InstallPlugin,
+  ImportPluginZip,
   Plugins,
   RevealPluginsFolder,
   SetExternalBrowser,
@@ -51,6 +52,7 @@ const marketPlugins = ref<PluginInfo[]>([]);
 const marketLoaded = ref(false);
 const error = ref("");
 const busyId = ref("");
+const importingZip = ref(false);
 
 // TODO(snippets): Text Snippets state — kept for the feature's return; only
 // used by the (currently unreachable) snippets pane below, so it costs nothing.
@@ -218,15 +220,12 @@ async function refreshAllFolderSources() {
 const brokenIcons = ref(new Set<string>());
 
 function hasPluginIcon(p: PluginInfo) {
-  return (!!p.IconPath && !brokenIcons.value.has(p.IconPath)) || (!!p.IconURL && !brokenIcons.value.has(p.IconURL));
+  return !!p.IconPath && !brokenIcons.value.has(p.IconPath);
 }
 
 function pluginIconSrc(p: PluginInfo) {
   if (p.IconPath && !brokenIcons.value.has(p.IconPath)) {
     return `/appicon?path=${encodeURIComponent(p.IconPath)}`;
-  }
-  if (p.IconURL && !brokenIcons.value.has(p.IconURL)) {
-    return p.IconURL;
   }
   return "";
 }
@@ -234,9 +233,6 @@ function pluginIconSrc(p: PluginInfo) {
 function onPluginIconError(p: PluginInfo) {
   if (p.IconPath) {
     brokenIcons.value.add(p.IconPath);
-  }
-  if (p.IconURL) {
-    brokenIcons.value.add(p.IconURL);
   }
 }
 
@@ -277,13 +273,11 @@ async function loadMarketPlugins() {
   error.value = "";
   try {
     const available = await AvailablePlugins();
-    console.log("DEBUG: AvailablePlugins result:", available);
-    console.log("DEBUG: AvailablePlugins count:", available?.length);
 
     const installedIds = new Set(installedPlugins.value.map(p => p.ID));
-    console.log("DEBUG: Installed IDs:", installedIds);
 
-    // Convert RemotePlugin (camelCase) to PluginInfo (PascalCase)
+    // Convert RemotePlugin (camelCase) to PluginInfo (PascalCase). Version
+    // is empty when no registry version is compatible with this app build.
     const filtered = (available ?? [])
       .filter(p => !installedIds.has(p.id)) // RemotePlugin uses 'id' not 'ID'
       .map(p => ({
@@ -293,25 +287,16 @@ async function loadMarketPlugins() {
         Description: p.description,
         Author: p.author,
         IconPath: "",
-        IconURL: p.icon_url || "",
         Disabled: false,
         AutoDisabled: false,
         Status: PluginStatus.StatusNotInstalled,
-        DownloadURL: p.download_url,
-        Category: p.category || "",
-        Keywords: p.keywords || [],
         Permissions: p.permissions || [],
-        Platforms: p.platforms || [],
-        MinHostVersion: p.minHostVersion || ""
+        Platforms: p.platforms || []
       } as PluginInfo));
-
-    console.log("DEBUG: Filtered market plugins:", filtered);
-    console.log("DEBUG: Filtered count:", filtered.length);
 
     marketPlugins.value = filtered;
     marketLoaded.value = true;
   } catch (e) {
-    console.error("DEBUG: Error loading market plugins:", e);
     error.value = String(e);
   }
 }
@@ -368,6 +353,24 @@ async function openFolder() {
     await RevealPluginsFolder();
   } catch (e) {
     error.value = String(e);
+  }
+}
+
+// Offline import: native zip picker → validate/install → hot reload.
+// A cancelled dialog resolves with "" and is a silent no-op.
+async function importZip() {
+  importingZip.value = true;
+  try {
+    const id = await ImportPluginZip();
+    if (id) {
+      pluginTab.value = "installed";
+      marketLoaded.value = false;
+      await loadInstalledPlugins();
+    }
+  } catch (e) {
+    error.value = String(e);
+  } finally {
+    importingZip.value = false;
   }
 }
 
@@ -579,12 +582,21 @@ async function runSnippetAction(snippet: SnippetModel, action: "enable" | "disab
               Manage your installed plugins or discover new ones from the marketplace
             </p>
           </div>
-          <button
-            class="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/80 transition-colors hover:bg-white/10"
-            @click="openFolder"
-          >
-            Open Plugins Folder
-          </button>
+          <div class="flex items-center gap-2">
+            <button
+              :disabled="importingZip"
+              class="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/80 transition-colors hover:bg-white/10 disabled:opacity-40"
+              @click="importZip"
+            >
+              {{ importingZip ? 'Importing…' : 'Import zip…' }}
+            </button>
+            <button
+              class="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/80 transition-colors hover:bg-white/10"
+              @click="openFolder"
+            >
+              Open Plugins Folder
+            </button>
+          </div>
         </div>
 
         <div class="mt-4 flex gap-2">
@@ -648,12 +660,16 @@ async function runSnippetAction(snippet: SnippetModel, action: "enable" | "disab
               <div class="flex items-center gap-2">
                 <span class="truncate text-[13px] font-semibold leading-tight text-white/90">{{ p.Name }}</span>
                 <span class="shrink-0 text-[10px] font-semibold leading-none text-white/45">v{{ p.Version }}</span>
+                <span
+                  class="shrink-0 rounded bg-white/10 px-1.5 py-0.5 text-[10px] leading-none"
+                  :class="p.Source === 'market' ? 'text-emerald-300/70' : 'text-white/45'"
+                  :title="p.Source === 'market' ? 'Installed from the marketplace (auto-upgrades)' : 'Installed locally (offline import or manual copy)'"
+                >{{ p.Source === 'market' ? 'Marketplace' : 'Offline' }}</span>
               </div>
               <div class="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] leading-none text-white/40">
                 <span class="truncate">{{ p.ID }}</span>
                 <span v-if="p.Description" class="truncate">{{ p.Description }}</span>
                 <span v-if="p.Author?.name" class="truncate">by {{ p.Author.name }}</span>
-                <span v-if="p.Category" class="rounded bg-white/10 px-1.5 py-0.5 text-white/55">{{ p.Category }}</span>
                 <span v-if="p.AutoDisabled" class="rounded bg-amber-400/15 px-1.5 py-0.5 text-amber-300/80">disabled after repeated timeouts</span>
                 <span v-for="perm in p.Permissions" :key="perm" class="rounded bg-white/10 px-1.5 py-0.5 text-white/55">{{ perm }}</span>
               </div>
@@ -684,20 +700,28 @@ async function runSnippetAction(snippet: SnippetModel, action: "enable" | "disab
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2">
                 <span class="truncate text-[14px] leading-tight text-white/90">{{ p.Name }}</span>
-                <span class="shrink-0 rounded bg-white/10 px-1.5 py-0.5 text-[10px] leading-none text-white/50">{{ p.Version }}</span>
+                <span v-if="p.Version" class="shrink-0 rounded bg-white/10 px-1.5 py-0.5 text-[10px] leading-none text-white/50">{{ p.Version }}</span>
               </div>
               <div class="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] leading-none text-white/40">
                 <span class="truncate">{{ p.ID }}</span>
                 <span v-if="p.Description" class="truncate">{{ p.Description }}</span>
                 <span v-if="p.Author?.name" class="truncate">by {{ p.Author.name }}</span>
-                <span v-if="p.Category" class="rounded bg-white/10 px-1.5 py-0.5 text-white/55">{{ p.Category }}</span>
-                <span v-for="keyword in p.Keywords?.slice(0, 3)" :key="keyword" class="rounded bg-white/10 px-1.5 py-0.5 text-white/55">{{ keyword }}</span>
               </div>
             </div>
 
-            <button :disabled="busyId === p.ID" class="rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs text-emerald-300/90 transition-colors hover:bg-emerald-500/30 disabled:opacity-40" @click="installPlugin(p)">
+            <button
+              v-if="p.Version"
+              :disabled="busyId === p.ID"
+              class="rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs text-emerald-300/90 transition-colors hover:bg-emerald-500/30 disabled:opacity-40"
+              @click="installPlugin(p)"
+            >
               {{ busyId === p.ID ? 'Installing...' : 'Install' }}
             </button>
+            <span
+              v-else
+              class="shrink-0 rounded-lg bg-white/[0.06] px-3 py-1.5 text-xs text-white/35"
+              title="No registry version is compatible with this app build"
+            >Incompatible</span>
           </div>
         </div>
       </div>

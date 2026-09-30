@@ -97,7 +97,7 @@ score = 模糊匹配分 + 8 × log₂(启动次数 + 1) + 12 × 2^(−距上次�
   - `${timestamp()}` → `1724587800000`（Unix 时间戳）
   - `${uuid()}` → `550e8400-e29b-41d4-a716-446655440000`（随机 UUID）
   - 支持日期格式：`YYYY`（4位年份）、`YY`（2位年份）、`MM`（月份）、`DD`（日期）、`HH`（24小时）、`mm`（分钟）、`ss`（秒）
-- 可扩展：插件可注册自定义模板函数（详见 plugins.md）
+- 可扩展：插件可注册自定义模板函数
 - 管理界面：设置窗口 Text Snippets 栏支持添加/删除/启用/禁用片段、全局开关
 - 权限要求：需要 macOS 辅助功能权限（Accessibility），设置界面可引导授权
 - 存储位置：`~/Library/Application Support/Kyvro/data.db`（`snippets` namespace）
@@ -106,11 +106,12 @@ score = 模糊匹配分 + 8 × log₂(启动次数 + 1) + 12 × 2^(−距上次�
 
 可扩展的插件架构，支持用户和开发者自定义搜索功能与命令。详见 [plugins.md](./plugins.md)；插件接口（manifest 字段、导出函数、结果行/动作 schema、PluginContext 能力面）的权威参考在仓库 `plugin-sdk/index.d.ts`（模块化声明，与 `internal/plugin` 实现保持对齐；插件入口以 JSDoc 标注 `@type {import("@kyvro/plugin-sdk").Plugin}` 即可获得编辑器全量补全）。
 
-- **扩展能力**：前缀触发实时搜索、静态命令（模糊匹配浮出）、数据持久化、多种操作类型（打开链接/复制/二级交互）
+- **扩展能力**：统一 Command 协议——manifest 声明 `commands[].prefix`（最长前缀 + 词边界匹配触发），`onAction` 同时承接前缀实时搜索与回调动作两种调用；storage 数据持久化、多种操作类型（打开链接/复制/二级交互）
 - **安装位置**：`~/Library/Application Support/Kyvro/plugins/`
 - **官方插件**：`com.kyvro.github`（GitHub 仓库搜索，`gh <query>` 或 `gh owner/repo`）
 - **示例插件**：`com.example.encode`（Base64 编码/URL 编码，包含 storage 演示）
-- **管理界面**：设置窗口 Plugins 栏支持启用/禁用、查看权限、打开插件目录
+- **管理界面**：设置窗口 Plugins 栏支持启用/禁用、查看权限、打开插件目录、离线导入 zip 包（manifest 全量校验通过即热加载）；已安装列表带来源标记（Marketplace / Offline），市场列表按版本适配显示 Install 或 Incompatible
+- **插件市场**：list.json v2 registry（`versions` / `minVersions` 平行数组选版，host 版本不满足时仍展示并标记 Incompatible）；在线安装/自动升级仅作用于 market 来源插件（启动后台执行，失败保留旧版本与 pin）；local 插件永不被自动改动。详见 [plugin-marketplace.md](./plugin-marketplace.md)
 
 ### 设置窗口（通用 / 插件管理 / Folders / 文本片段(隐藏) / 关于）
 

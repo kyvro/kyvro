@@ -14,14 +14,31 @@ func TestParseManifestValid(t *testing.T) {
 	if m.ID != "com.example.test" || m.Version != "0.1.0" || m.Main != "index.js" {
 		t.Errorf("unexpected fields: %+v", m)
 	}
-	if len(m.SearchPrefixes) != 1 || m.SearchPrefixes[0] != "b64" {
-		t.Errorf("SearchPrefixes = %v", m.SearchPrefixes)
+	if len(m.Commands) != 1 {
+		t.Fatalf("commands = %v", m.Commands)
 	}
-	if len(m.CommandEventIDs) != 1 || !m.CommandEventIDs["test.cmd"] {
-		t.Errorf("commands = %v", m.CommandEventIDs)
+	c := m.Commands[0]
+	if c.ID != "test.cmd" || c.Title != "Test Command" {
+		t.Errorf("command = %+v", c)
+	}
+	if c.Prefix != "b64" {
+		t.Errorf("prefix = %q, want normalized b64", c.Prefix)
 	}
 	if m.DisplayName() != "Test Plugin" {
 		t.Errorf("DisplayName = %q", m.DisplayName())
+	}
+}
+
+func TestParseManifestPrefixNormalized(t *testing.T) {
+	m := manifestMap(t, validManifest)
+	cmds := m["commands"].([]any)
+	cmds[0].(map[string]any)["prefix"] = "  B64  "
+	pm, err := ParseManifest(marshal(t, m))
+	if err != nil {
+		t.Fatalf("prefix normalization rejected: %v", err)
+	}
+	if pm.Commands[0].Prefix != "b64" {
+		t.Errorf("prefix = %q, want lowercased/trimmed b64", pm.Commands[0].Prefix)
 	}
 }
 
@@ -45,20 +62,20 @@ func TestParseManifestErrors(t *testing.T) {
 		{"icon absolute", func(m map[string]any) { m["icon"] = "/etc/logo.svg" }, ErrInvalidArgument},
 		{"icon escape", func(m map[string]any) { m["icon"] = "../logo.svg" }, ErrInvalidArgument},
 		{"platform mismatch", func(m map[string]any) { m["platforms"] = []string{"windows"} }, ErrIncompatibleVersion},
-		{"onCommand references missing command", func(m map[string]any) {
-			m["activationEvents"] = []string{"onCommand:missing.cmd"}
-		}, ErrInvalidArgument},
-		{"empty search prefix", func(m map[string]any) {
-			m["activationEvents"] = []string{"onSearchPrefix:"}
-		}, ErrInvalidArgument},
-		{"unknown activation event", func(m map[string]any) {
-			m["activationEvents"] = []string{"onInvalidEvent"}
-		}, ErrInvalidArgument},
 		{"duplicate command id", func(m map[string]any) {
-			m["commands"] = []map[string]any{{"id": "a"}, {"id": "a"}}
+			m["commands"] = []map[string]any{{"id": "a", "prefix": "x"}, {"id": "a", "prefix": "y"}}
+		}, ErrInvalidArgument},
+		{"duplicate command prefix", func(m map[string]any) {
+			m["commands"] = []map[string]any{{"id": "a", "prefix": "x"}, {"id": "b", "prefix": "X"}}
+		}, ErrInvalidArgument},
+		{"missing command prefix", func(m map[string]any) {
+			m["commands"] = []map[string]any{{"id": "a", "title": "x"}}
+		}, ErrInvalidArgument},
+		{"empty command prefix", func(m map[string]any) {
+			m["commands"] = []map[string]any{{"id": "a", "prefix": "   "}}
 		}, ErrInvalidArgument},
 		{"empty command id", func(m map[string]any) {
-			m["commands"] = []map[string]any{{"title": "x"}}
+			m["commands"] = []map[string]any{{"title": "x", "prefix": "x"}}
 		}, ErrInvalidArgument},
 	}
 	for _, tc := range cases {
@@ -77,7 +94,6 @@ func TestParseManifestErrors(t *testing.T) {
 
 func TestParseManifestDefaults(t *testing.T) {
 	m := manifestMap(t, validManifest)
-	delete(m, "activationEvents")
 	delete(m, "permissions")
 	delete(m, "commands")
 	delete(m, "name")
@@ -85,7 +101,7 @@ func TestParseManifestDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("minimal manifest rejected: %v", err)
 	}
-	if len(pm.SearchPrefixes) != 0 || pm.DisplayName() != pm.ID {
+	if len(pm.Commands) != 0 || pm.DisplayName() != pm.ID {
 		t.Errorf("derived fields wrong: %+v", pm)
 	}
 }

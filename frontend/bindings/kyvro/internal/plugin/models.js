@@ -45,7 +45,7 @@ export class Author {
 }
 
 /**
- * PluginInfo describes a plugin for the settings UI, combining local and remote metadata.
+ * PluginInfo describes an installed plugin for the settings UI.
  */
 export class PluginInfo {
     /**
@@ -103,14 +103,6 @@ export class PluginInfo {
              */
             this["IconPath"] = "";
         }
-        if (!("IconURL" in $$source)) {
-            /**
-             * remote icon URL for registry plugins
-             * @member
-             * @type {string}
-             */
-            this["IconURL"] = "";
-        }
         if (!("Disabled" in $$source)) {
             /**
              * user- or auto-disabled
@@ -134,29 +126,13 @@ export class PluginInfo {
              */
             this["Status"] = PluginStatus.$zero;
         }
-        if (!("DownloadURL" in $$source)) {
+        if (!("Source" in $$source)) {
             /**
-             * URL for downloading from registry
+             * install source: SourceMarket or SourceLocal
              * @member
              * @type {string}
              */
-            this["DownloadURL"] = "";
-        }
-        if (!("Category" in $$source)) {
-            /**
-             * Plugin category for marketplace
-             * @member
-             * @type {string}
-             */
-            this["Category"] = "";
-        }
-        if (!("Keywords" in $$source)) {
-            /**
-             * Search keywords
-             * @member
-             * @type {string[]}
-             */
-            this["Keywords"] = [];
+            this["Source"] = "";
         }
 
         Object.assign(this, $$source);
@@ -170,7 +146,6 @@ export class PluginInfo {
     static createFrom($$source = {}) {
         const $$createField4_0 = $$createType0;
         const $$createField5_0 = $$createType1;
-        const $$createField13_0 = $$createType0;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("Permissions" in $$parsedSource) {
             $$parsedSource["Permissions"] = $$createField4_0($$parsedSource["Permissions"]);
@@ -178,48 +153,7 @@ export class PluginInfo {
         if ("Author" in $$parsedSource) {
             $$parsedSource["Author"] = $$createField5_0($$parsedSource["Author"]);
         }
-        if ("Keywords" in $$parsedSource) {
-            $$parsedSource["Keywords"] = $$createField13_0($$parsedSource["Keywords"]);
-        }
         return new PluginInfo(/** @type {Partial<PluginInfo>} */($$parsedSource));
-    }
-}
-
-/**
- * PluginStats represents plugin statistics.
- */
-export class PluginStats {
-    /**
-     * Creates a new PluginStats instance.
-     * @param {Partial<PluginStats>} [$$source = {}] - The source object to create the PluginStats.
-     */
-    constructor($$source = {}) {
-        if (!("downloads" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["downloads"] = 0;
-        }
-        if (!("rating" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["rating"] = 0;
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new PluginStats instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {PluginStats}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new PluginStats(/** @type {Partial<PluginStats>} */($$parsedSource));
     }
 }
 
@@ -251,7 +185,10 @@ export const PluginStatus = {
 };
 
 /**
- * RemotePlugin represents a plugin available for installation from the registry.
+ * RemotePlugin is the client-facing view of a registry plugin after version
+ * selection. Version is the newest registry version this host can run —
+ * empty means none is compatible (DownloadURL is empty too), so the UI can
+ * surface the entry as Incompatible instead of hiding it.
  */
 export class RemotePlugin {
     /**
@@ -304,23 +241,9 @@ export class RemotePlugin {
         if (/** @type {any} */(false)) {
             /**
              * @member
-             * @type {string | undefined}
-             */
-            this["icon_url"] = undefined;
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * @member
              * @type {Date | undefined}
              */
             this["updated_at"] = undefined;
-        }
-        if (!("minHostVersion" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["minHostVersion"] = "";
         }
         if (!("permissions" in $$source)) {
             /**
@@ -336,27 +259,6 @@ export class RemotePlugin {
              */
             this["platforms"] = [];
         }
-        if (!("category" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["category"] = "";
-        }
-        if (!("keywords" in $$source)) {
-            /**
-             * @member
-             * @type {string[]}
-             */
-            this["keywords"] = [];
-        }
-        if (!("stats" in $$source)) {
-            /**
-             * @member
-             * @type {PluginStats}
-             */
-            this["stats"] = (new PluginStats());
-        }
 
         Object.assign(this, $$source);
     }
@@ -368,29 +270,21 @@ export class RemotePlugin {
      */
     static createFrom($$source = {}) {
         const $$createField4_0 = $$createType1;
-        const $$createField7_0 = $Create.DateFromTime;
-        const $$createField9_0 = $$createType0;
-        const $$createField10_0 = $$createType0;
-        const $$createField12_0 = $$createType0;
-        const $$createField13_0 = $$createType2;
+        const $$createField6_0 = $Create.DateFromTime;
+        const $$createField7_0 = $$createType0;
+        const $$createField8_0 = $$createType0;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("author" in $$parsedSource) {
             $$parsedSource["author"] = $$createField4_0($$parsedSource["author"]);
         }
         if ("updated_at" in $$parsedSource) {
-            $$parsedSource["updated_at"] = $$createField7_0($$parsedSource["updated_at"]);
+            $$parsedSource["updated_at"] = $$createField6_0($$parsedSource["updated_at"]);
         }
         if ("permissions" in $$parsedSource) {
-            $$parsedSource["permissions"] = $$createField9_0($$parsedSource["permissions"]);
+            $$parsedSource["permissions"] = $$createField7_0($$parsedSource["permissions"]);
         }
         if ("platforms" in $$parsedSource) {
-            $$parsedSource["platforms"] = $$createField10_0($$parsedSource["platforms"]);
-        }
-        if ("keywords" in $$parsedSource) {
-            $$parsedSource["keywords"] = $$createField12_0($$parsedSource["keywords"]);
-        }
-        if ("stats" in $$parsedSource) {
-            $$parsedSource["stats"] = $$createField13_0($$parsedSource["stats"]);
+            $$parsedSource["platforms"] = $$createField8_0($$parsedSource["platforms"]);
         }
         return new RemotePlugin(/** @type {Partial<RemotePlugin>} */($$parsedSource));
     }
@@ -399,4 +293,3 @@ export class RemotePlugin {
 // Private type creation functions
 const $$createType0 = $Create.Array($Create.Any);
 const $$createType1 = Author.createFrom;
-const $$createType2 = PluginStats.createFrom;

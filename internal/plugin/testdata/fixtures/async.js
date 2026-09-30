@@ -1,5 +1,5 @@
-// async.js: activate returns a Promise; search must observe its effect
-// (the host awaits settlement before serving searches).
+// async.js: activate returns a Promise; the live call must observe its
+// effect (the host awaits settlement before serving calls).
 var ready = "no";
 module.exports = {
   activate: function () {
@@ -7,9 +7,7 @@ module.exports = {
       ready = "yes";
     });
   },
-  provider: {
-    search: function () {
-      return [{ id: "ready", title: "ready:" + ready, actions: [{ type: "copy", value: ready }] }];
-    }
+  onAction: function () {
+    return [{ id: "ready", title: "ready:" + ready, actions: [{ type: "copy", value: ready }] }];
   }
 };

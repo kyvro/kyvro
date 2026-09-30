@@ -1,29 +1,25 @@
-// basic.js: a well-formed plugin — provider gated on the "b64" prefix,
-// onAction echoing ids/args.
+// basic.js: a well-formed plugin — command "test.cmd" triggers live via the
+// "b64" prefix (full query as args[0]); onAction echoes ids/args and chains
+// a callback.
 module.exports = {
   activate: function (ctx) {},
-  provider: {
-    id: "test.provider",
-    search: function (query) {
-      if (query.indexOf("b64") !== 0) {
-        return [];
-      }
+  onAction: function (actionId, args) {
+    var first = (args && args[0]) || "";
+    if (actionId === "back") {
       return [
         {
-          id: "first",
-          title: "P:" + query,
-          subtitle: "sub",
-          scoreHint: 60,
-          actions: [{ type: "copy", value: "copied" }]
+          id: "a1",
+          title: "action:back:" + first,
+          actions: [{ type: "copy", value: "c" }]
         }
       ];
     }
-  },
-  onAction: function (actionId, args) {
     return [
       {
-        id: "a1",
-        title: "action:" + actionId + ":" + ((args && args[0]) || ""),
+        id: "first",
+        title: "P:" + first,
+        subtitle: "sub",
+        scoreHint: 60,
         actions: [
           { type: "callback", id: "back", args: ["x"] },
           { type: "open-url", url: "https://example.com" },

@@ -10,6 +10,7 @@
 |---|---|---|---|---|
 | App index | 可重建缓存 | `cache/app-index.json` | ✅ 后台重扫 | 进程内 + 磁盘缓存 |
 | Folder index | 可重建缓存 | `cache/folder-index.json` | ✅ 重扫 enabled sources | 进程内 + 磁盘缓存 |
+| 插件命令索引（prefix） | 运行时结构（见 §1.3） | 进程内存（不落盘） | ✅ 随插件加载重建 | 随插件生命周期 |
 | folder-sources | 用户状态 | bbolt `folder-sources` bucket | ❌ 不可丢弃 | 永久（除非用户删除） |
 | usage (frecency) | 用户状态 | bbolt `usage` bucket | ❌ 不可丢弃 | 永久 |
 | 内存 SearchIndex | 运行时结构 | 进程内存 | ✅ 由缓存条目重建 | 随进程 |
@@ -48,6 +49,14 @@ type AppIndexFile / FolderIndexFile struct {
 - Folder entry：`ID`（`folder:<绝对路径>`）、`Name`（basename）、`Path`、`SourceID`、`SearchKeys`（仅 basename）、`UpdatedAt`。
 
 `SearchKeys` 是 Kyvro 自己的预计算字段，不是 fuzzy 库内部索引；启动时从缓存读 entries 直接恢复内存索引，搜索时对内存 keys 调 `fuzzy.Find`。**不要把 `sahilm/fuzzy` 的内部数据 dump 到磁盘**——库暴露的 `Find` / `FindFrom` / `FindNoSort` 都是按查询即时遍历字符串集合的函数，没有可持久化、可反序列化的索引对象；持久化 Kyvro 自己的原始 entry 与可稳定重建的 search keys。后续若需要真正的持久化倒排索引，应单独设计 Kyvro-owned 格式，不绑定 fuzzy 实现细节。
+
+### 1.3 插件命令索引（prefix）
+
+插件扩展的触发索引，协议语义见 [plugins.md](./plugins.md) §1：
+
+- **索引内容**：enabled 插件 manifest `commands[].prefix`（小写归一），值为插件 ID + 命令 ID（`internal/plugin/manager.go` 的 `commandIndex`）。
+- **检索**：最长前缀 + 词边界锚定匹配——查询等于 prefix，或 prefix 后紧跟空格（`"ghost"` 永不命中 `"gh"`）；按长度从大到小逐次 map 查找，次数受索引内最长 prefix 约束，实际 O(1)。命中才 live 调用插件，匹配路径零 JS，成本与已安装插件数量无关。同 prefix 冲突取最小插件 ID，落败方记日志（shadowed）。
+- **不落盘**：条目量为插件数量级，随 manifest 即时重建，不进 `cache/` 缓存文件（区别于 App / Folder 索引）。
 
 ## 2. 存储布局
 
@@ -150,6 +159,18 @@ Refresh: Scan ->（失败：记 LastError，保留旧条目）
 
 `folder-index.json` 合并存储所有 source 的条目（条目带 `SourceID`），per-source 替换只重写该 source 的部分、其余原样保留；删除同理隔离。
 
+### 4.4 插件命令索引更新链
+
+命令索引只随插件生命周期变化，与 App / Folder 扫描无关（协议见 [plugins.md](./plugins.md) §1）；更新方式统一为 `rebuildCommandsLocked()` 全量重建（条目量为插件数量级，重建廉价）：
+
+```text
+LoadAll（启动 / 安装·卸载后重载）: 遍历插件后全量重建
+SetEnabled（用户启用/禁用）       : 全量重建
+超时自动禁用（3 次连续超时）      : 禁用后全量重建
+```
+
+索引只在 `Manager` 锁内重建；查询路径持读锁做 `commandIndex.match`，未命中零 JS 调用。
+
 ## 5. 搜索路径（运行时只读）
 
 ```text
@@ -160,6 +181,8 @@ Engine.Search(query)
   -> provider 内排序（分数降序，tie-break 标题升序）
   -> 按 ID 去重（先出现者胜） -> 截断 limit(9) -> 追加
 ```
+
+plugins provider 是例外：不走 fuzzy.Find，而是查询命中插件命令索引（prefix 前缀精确检索，见 §1.3）后 live 调用插件（协议见 [plugins.md](./plugins.md) §3）；未命中不产生任何 JS 调用。
 
 索引稳定性依赖**稳定 ID**（前缀规则详见 [search.md](./search.md) §5）：`app:<bundleID>`（缺省 `app:path:<abs>`）、`folder:<abs>`、`calc:<expr>`、`web:<query>`、`plugin:<pluginID>:<id>`。
 
@@ -195,4 +218,6 @@ Engine.Search(query)
 | Folder scanner | `internal/folders/scanner.go` |
 | Folder provider | `internal/folders/provider.go` |
 | Folder 生命周期控制器 | `internal/folders/controller.go` |
+| 插件命令索引（match） | `internal/plugin/provider.go` |
+| 命令索引重建 / live 调用 | `internal/plugin/manager.go` |
 | 启动编排 | `service/search_service.go` (`ServiceStartup`) |

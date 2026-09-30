@@ -5,7 +5,6 @@
 export {
     Author,
     PluginInfo,
-    PluginStats,
     PluginStatus,
     RemotePlugin
 } from "./models.js";

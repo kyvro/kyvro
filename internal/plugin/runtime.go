@@ -40,9 +40,7 @@ type jsRuntime struct {
 	storage  *PluginStorage // non-nil only with a granted storage permission
 	iconPath string         // absolute path of the manifest icon ("" when none)
 
-	searchFn goja.Callable // exports.provider.search (nil when absent)
 	actionFn goja.Callable // exports.onAction (nil when absent)
-	hasProv  bool
 
 	reqs     chan runtimeReq
 	quit     chan struct{}
@@ -105,14 +103,6 @@ func newRuntime(m *Manifest, dir string, storage *PluginStorage) (*jsRuntime, er
 	}
 	exports := exportsVal.ToObject(vm)
 
-	if provider := exports.Get("provider"); !isAbsent(provider) {
-		if search := provider.ToObject(vm).Get("search"); search != nil {
-			if fn, ok := goja.AssertFunction(search); ok {
-				r.searchFn = fn
-				r.hasProv = true
-			}
-		}
-	}
 	if onAction := exports.Get("onAction"); !isAbsent(onAction) {
 		if fn, ok := goja.AssertFunction(onAction); ok {
 			r.actionFn = fn
@@ -185,43 +175,6 @@ func (r *jsRuntime) buildContext(vm *goja.Runtime) goja.Value {
 		})
 	}
 	ctx.Set("log", lg)
-
-	// Add template function registration support
-	// Plugins can register functions for use in Text Snippets
-	// Usage: ctx.template.registerFunc("upper", (args) => args[0].toUpperCase())
-	tpl := vm.NewObject()
-	tpl.Set("registerFunc", func(call goja.FunctionCall) goja.Value {
-		if len(call.Arguments) < 2 {
-			panic(vm.NewGoError(errors.New("registerFunc requires 2 arguments: name and function")))
-		}
-		name := call.Argument(0).String()
-		fnVal := call.Argument(1)
-
-		// Verify it's a function
-		fnObj, ok := goja.AssertFunction(fnVal)
-		if !ok {
-			panic(vm.NewGoError(errors.New("second argument must be a function")))
-		}
-
-		// Capture the vm for later calls
-		fn := func(args ...string) (string, error) {
-			vmArgs := make([]goja.Value, len(args))
-			for i, arg := range args {
-				vmArgs[i] = vm.ToValue(arg)
-			}
-			result, err := fnObj(goja.Undefined(), vmArgs...)
-			if err != nil {
-				return "", wrapJS(r.pluginID, err)
-			}
-			if result == nil || goja.IsUndefined(result) || goja.IsNull(result) {
-				return "", nil
-			}
-			return result.ToString().String(), nil
-		}
-		core.RegisterTemplateFunc(name, fn)
-		return nil
-	})
-	ctx.Set("template", tpl)
 
 	return ctx
 }
@@ -353,28 +306,10 @@ func (r *jsRuntime) Strikes() int { return int(r.consecutiveTimeouts.Load()) }
 // resetStrikes clears the consecutive-timeout counter (on re-enable).
 func (r *jsRuntime) resetStrikes() { r.consecutiveTimeouts.Store(0) }
 
-// HasProvider reports whether the module exports a usable provider.search.
-func (r *jsRuntime) HasProvider() bool { return r.hasProv }
-
-// Search runs provider.search(query) on the worker VM.
-func (r *jsRuntime) Search(ctx context.Context, query string, timeout time.Duration) ([]core.SearchResult, error) {
-	if r.searchFn == nil {
-		return nil, nil
-	}
-	v, err := r.call(ctx, timeout, func(vm *goja.Runtime, deadline time.Time) (any, error) {
-		res, err := r.searchFn(goja.Undefined(), vm.ToValue(query))
-		if err != nil {
-			return nil, wrapJS(r.pluginID, err)
-		}
-		return r.await(vm, res, deadline)
-	})
-	if err != nil {
-		return nil, err
-	}
-	return r.convertLogged(v)
-}
-
-// RunAction runs onAction(actionID, args...) on the worker VM.
+// RunAction runs onAction(actionID, args) on the worker VM. It serves both
+// call sources (plugins.md §3): prefix-hit live calls (short budget, result
+// rows go to the main list) and callback actions (long budget, result rows
+// go to the secondary list); the caller picks the timeout.
 func (r *jsRuntime) RunAction(ctx context.Context, actionID string, args []string, timeout time.Duration) ([]core.SearchResult, error) {
 	if r.actionFn == nil {
 		return nil, Errorf(r.pluginID, ErrInvalidArgument, "module does not export onAction")

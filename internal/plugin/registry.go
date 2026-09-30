@@ -4,386 +4,342 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
+
+	"golang.org/x/mod/semver"
 )
 
-// RegistryList represents the structure of list.json from the plugin registry.
+// registryListVersion is the only list.json schema this client understands
+// (slim metadata + versions/minVersions parallel arrays,
+// docs/plugin-marketplace.md); any other version is rejected.
+const registryListVersion = 1
+
+// registryBaseURL is the raw-content root of the official plugin registry.
+const registryBaseURL = "https://raw.githubusercontent.com/kyvro/plugins/main"
+
+// RegistryList is the decoded list.json.
 type RegistryList struct {
-	Version      int       `json:"version"`
-	LastUpdated  time.Time `json:"lastUpdated"`
-	Plugins      []RegistryPlugin `json:"plugins"`
+	Version     int              `json:"version"`
+	LastUpdated time.Time        `json:"lastUpdated"`
+	Plugins     []RegistryPlugin `json:"plugins"`
 }
 
-// RegistryPlugin represents a plugin entry in the registry list.json.
+// RegistryPlugin is one list.json entry. Versions is an ascending SemVer
+// list; MinVersions is a parallel array whose i-th element is the minimum
+// Kyvro version able to run Versions[i] (docs/plugin-marketplace.md
+// 「版本适配」).
 type RegistryPlugin struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	Description    string            `json:"description"`
-	Version        string            `json:"version"`
-	Author         Author            `json:"author"`
-	Repository     string            `json:"repository"`
-	Homepage       string            `json:"homepage"`
-	MinHostVersion string            `json:"minHostVersion"`
-	Permissions    []string          `json:"permissions"`
-	Platforms      []string          `json:"platforms"`
-	Versions       []string          `json:"versions"`
-	Category       string            `json:"category"`
-	Keywords       []string          `json:"keywords"`
-	Stats          PluginStats       `json:"stats"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Author      Author   `json:"author"`
+	Permissions []string `json:"permissions"`
+	Platforms   []string `json:"platforms"`
+	Versions    []string `json:"versions"`
+	MinVersions []string `json:"minVersions"`
 }
 
-// PluginStats represents plugin statistics.
-type PluginStats struct {
-	Downloads int     `json:"downloads"`
-	Rating    float64 `json:"rating"`
+// RemotePlugin is the client-facing view of a registry plugin after version
+// selection. Version is the newest registry version this host can run —
+// empty means none is compatible (DownloadURL is empty too), so the UI can
+// surface the entry as Incompatible instead of hiding it.
+type RemotePlugin struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Version     string    `json:"version"`
+	Description string    `json:"description"`
+	Author      Author    `json:"author"`
+	DownloadURL string    `json:"download_url"`
+	UpdatedAt   time.Time `json:"updated_at,omitempty"`
+	Permissions []string  `json:"permissions"`
+	Platforms   []string  `json:"platforms"`
 }
 
-// RegistryClient fetches plugin metadata from a remote registry (e.g., GitHub).
+// SelectVersion applies the marketplace selection rule: the highest
+// versions[i] whose minVersions[i] is satisfied by appVersion. versions /
+// minVersions must be equal-length arrays; malformed entries are skipped.
+// Returns INCOMPATIBLE_VERSION when no version fits.
+func SelectVersion(versions, minVersions []string, appVersion string) (string, error) {
+	if len(versions) == 0 {
+		return "", Errorf("", ErrInvalidArgument, "registry entry has no versions")
+	}
+	if len(minVersions) != len(versions) {
+		return "", Errorf("", ErrInvalidArgument,
+			"minVersions length %d does not match versions length %d", len(minVersions), len(versions))
+	}
+	best := ""
+	for i, v := range versions {
+		if !validSemver(v) || !validSemver(minVersions[i]) {
+			continue
+		}
+		if semver.Compare("v"+appVersion, "v"+minVersions[i]) >= 0 &&
+			(best == "" || semver.Compare("v"+v, "v"+best) > 0) {
+			best = v
+		}
+	}
+	if best == "" {
+		return "", Errorf("", ErrIncompatibleVersion,
+			"host %s satisfies none of the available versions %v", appVersion, versions)
+	}
+	return best, nil
+}
+
+// decodeList parses list.json bytes and rejects schemas this client cannot
+// interpret (the registry launches directly on the final schema).
+func decodeList(data []byte) (*RegistryList, error) {
+	var list RegistryList
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, fmt.Errorf("parse list.json: %w", err)
+	}
+	if list.Version != registryListVersion {
+		return nil, fmt.Errorf("list.json version %d unsupported (client supports %d)",
+			list.Version, registryListVersion)
+	}
+	return &list, nil
+}
+
+// downloadURL builds the raw-GitHub archive URL for one plugin version
+// (docs/plugin-marketplace.md「下载 URL 拼接规则」).
+func downloadURL(id, version string) string {
+	return fmt.Sprintf("%s/%s/%s-%s.zip", registryBaseURL, id, id, version)
+}
+
+// remoteFromEntry converts one registry entry into the client view by
+// running the selection rule against the running host. Incompatible entries
+// keep empty Version/DownloadURL.
+func remoteFromEntry(rp *RegistryPlugin, updatedAt time.Time) RemotePlugin {
+	version, err := SelectVersion(rp.Versions, rp.MinVersions, HostVersion)
+	url := ""
+	if err == nil {
+		url = downloadURL(rp.ID, version)
+	}
+	return RemotePlugin{
+		ID:          rp.ID,
+		Name:        rp.Name,
+		Version:     version,
+		Description: rp.Description,
+		Author:      rp.Author,
+		DownloadURL: url,
+		UpdatedAt:   updatedAt,
+		Permissions: rp.Permissions,
+		Platforms:   rp.Platforms,
+	}
+}
+
+// remoteFromList converts a decoded registry list, ordered by id for
+// deterministic UI display.
+func remoteFromList(list *RegistryList) []RemotePlugin {
+	plugins := make([]RemotePlugin, 0, len(list.Plugins))
+	for i := range list.Plugins {
+		plugins = append(plugins, remoteFromEntry(&list.Plugins[i], list.LastUpdated))
+	}
+	sort.Slice(plugins, func(i, j int) bool { return plugins[i].ID < plugins[j].ID })
+	return plugins
+}
+
+// RegistryClient fetches plugin metadata from the remote registry.
 type RegistryClient struct {
 	client   *http.Client
-	registry string // Base URL for raw content: "https://raw.githubusercontent.com/kyvro/plugins/main"
-	listURL  string // URL for list.json
+	registry string // raw-content base URL
+	listURL  string // URL of list.json
+	cacheDir string // list cache override (tests); "" = app data dir
 }
 
 // NewRegistryClient creates a client for the official Kyvro plugin registry.
 func NewRegistryClient() *RegistryClient {
-	const baseURL = "https://raw.githubusercontent.com/kyvro/plugins/main"
+	return newRegistryClient(registryBaseURL)
+}
+
+// newRegistryClient targets an arbitrary base URL (test injection).
+func newRegistryClient(baseURL string) *RegistryClient {
 	return &RegistryClient{
-		client: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+		client:   &http.Client{Timeout: 10 * time.Second},
 		registry: baseURL,
 		listURL:  baseURL + "/list.json",
 	}
 }
 
-// RemotePlugin represents a plugin available for installation from the registry.
-type RemotePlugin struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	Version        string            `json:"version"`
-	Description    string            `json:"description"`
-	Author         Author            `json:"author"`
-	DownloadURL    string            `json:"download_url"`
-	IconURL        string            `json:"icon_url,omitempty"`
-	UpdatedAt      time.Time         `json:"updated_at,omitempty"`
-	MinHostVersion string            `json:"minHostVersion"`
-	Permissions    []string          `json:"permissions"`
-	Platforms      []string          `json:"platforms"`
-	Category       string            `json:"category"`
-	Keywords       []string          `json:"keywords"`
-	Stats          PluginStats       `json:"stats"`
-}
-
-// FetchPlugins retrieves the list of available plugins from the registry.
-// It first checks the lastUpdated timestamp to decide if the full list needs to be fetched.
+// FetchPlugins retrieves the available plugin list, using the lastUpdated
+// file for incremental updates: the full list.json is only downloaded when
+// the remote timestamp differs from the locally cached one.
 func (r *RegistryClient) FetchPlugins() ([]RemotePlugin, error) {
-	// First, try to get the remote lastUpdated timestamp
-	remoteLastUpdated, err := r.fetchLastUpdated()
+	remoteStamp, err := r.fetchLastUpdated()
 	if err != nil {
-		fmt.Printf("DEBUG: Failed to fetch lastUpdated, falling back to full list: %v\n", err)
+		log.Printf("registry: lastUpdated check failed, fetching full list: %v", err)
 		return r.fetchFullList()
 	}
-
-	// Get the local cached lastUpdated timestamp
-	localLastUpdated := r.getLocalCachedLastUpdated()
-	fmt.Printf("DEBUG: Remote lastUpdated: %s, Local cached: %s\n", remoteLastUpdated, localLastUpdated)
-
-	// If timestamps match, use the cached list
-	if remoteLastUpdated == localLastUpdated && localLastUpdated != "" {
-		fmt.Printf("DEBUG: Timestamps match, using cached list\n")
-		return r.getCachedList()
+	if localStamp := r.getLocalCachedLastUpdated(); localStamp != "" && localStamp == remoteStamp {
+		plugins, err := r.getCachedList()
+		if err == nil {
+			return plugins, nil
+		}
+		// Stale or broken cache (e.g. an old schema): fall through to a
+		// full fetch, which rewrites the cache.
+		log.Printf("registry: cached list unusable, fetching full list: %v", err)
 	}
-
-	// Timestamps differ or no cache, fetch the full list
-	fmt.Printf("DEBUG: Timestamps differ or no cache, fetching full list\n")
 	return r.fetchFullList()
 }
 
-// fetchLastUpdated retrieves the lastUpdated timestamp from the server.
-func (r *RegistryClient) fetchLastUpdated() (string, error) {
-	// Construct the lastUpdated file URL
-	lastUpdatedURL := r.registry + "/lastUpdated"
-
-	req, err := http.NewRequest("GET", lastUpdatedURL, nil)
-	if err != nil {
-		return "", err
-	}
-
-	req.Header.Set("User-Agent", "Kyvro-Launcher/0.1.0")
-
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-
-	// Read the timestamp (single line)
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	return string(data), nil
-}
-
-// getLocalCachedLastUpdated retrieves the lastUpdated timestamp from the local cache.
-func (r *RegistryClient) getLocalCachedLastUpdated() string {
-	// Try to read from local cache directory
-	cachePath := r.getLocalCachePath()
-	if data, err := os.ReadFile(cachePath + "/lastUpdated"); err == nil {
-		return string(data)
-	}
-	return ""
-}
-
-// getCachedList retrieves the plugin list from local cache.
-func (r *RegistryClient) getCachedList() ([]RemotePlugin, error) {
-	cachePath := r.getLocalCachePath()
-	listPath := cachePath + "/list.json"
-
-	data, err := os.ReadFile(listPath)
-	if err != nil {
-		return nil, fmt.Errorf("read cached list: %w", err)
-	}
-
-	var list RegistryList
-	if err := json.Unmarshal(data, &list); err != nil {
-		return nil, fmt.Errorf("parse cached list: %w", err)
-	}
-
-	return r.convertToList(&list)
-}
-
-// getLocalCachePath returns the path to the local plugin cache directory.
-func (r *RegistryClient) getLocalCachePath() string {
-	// Use the same directory structure as the plugin system
-	homeDir, _ := os.UserHomeDir()
-	cachePath := filepath.Join(homeDir, "Library", "Application Support", "Kyvro")
-
-	// Ensure cache directory exists
-	os.MkdirAll(cachePath, 0o755)
-
-	return cachePath
-}
-
-// fetchFullList retrieves the complete plugin list from the server.
-func (r *RegistryClient) fetchFullList() ([]RemotePlugin, error) {
-	var list RegistryList
-
-	// Try HTTP fetch first
-	if r.listURL != "" {
-		req, err := http.NewRequest("GET", r.listURL, nil)
-		if err == nil {
-			req.Header.Set("User-Agent", "Kyvro-Launcher/0.1.0")
-
-			resp, err := r.client.Do(req)
-			if err == nil {
-				defer resp.Body.Close()
-
-				if resp.StatusCode == http.StatusOK {
-					err = json.NewDecoder(resp.Body).Decode(&list)
-					if err == nil {
-						fmt.Printf("DEBUG: Successfully fetched %d plugins from HTTP\n", len(list.Plugins))
-
-						// Cache the result locally
-						r.cacheList(&list)
-
-						return r.convertToList(&list)
-					} else {
-						fmt.Printf("DEBUG: Failed to decode HTTP response: %v\n", err)
-					}
-				} else {
-					fmt.Printf("DEBUG: HTTP request returned status %d\n", resp.StatusCode)
-				}
-			} else {
-				fmt.Printf("DEBUG: HTTP request failed: %v\n", err)
-			}
-		} else {
-			fmt.Printf("DEBUG: Failed to create HTTP request: %v\n", err)
+// FetchPlugin retrieves the client view of one registry plugin by ID. The
+// remote list is consulted first; the repository-local plugins/list.json is
+// a development-only fallback when the network fetch fails.
+func (r *RegistryClient) FetchPlugin(id string) (*RemotePlugin, error) {
+	if data, err := r.httpGet(r.listURL); err == nil {
+		list, derr := decodeList(data)
+		if derr != nil {
+			return nil, fmt.Errorf("fetch registry: %w", derr)
 		}
+		if rp := findPluginInList(list, id); rp != nil {
+			return rp, nil
+		}
+		return nil, fmt.Errorf("plugin %s not found in registry", id)
 	}
-
-	// Fallback to local file (for development/testing)
-	fmt.Printf("DEBUG: Falling back to local file\n")
-	var err error
-	list, err = r.fetchLocalList()
+	list, err := r.fetchLocalList()
 	if err != nil {
-		fmt.Printf("DEBUG: Local file fetch failed: %v\n", err)
 		return nil, fmt.Errorf("fetch registry: %w", err)
 	}
-
-	fmt.Printf("DEBUG: Successfully loaded %d plugins from local file\n", len(list.Plugins))
-	return r.convertToList(&list)
+	if rp := findPluginInList(&list, id); rp != nil {
+		return rp, nil
+	}
+	return nil, fmt.Errorf("plugin %s not found in registry", id)
 }
 
-// cacheList saves the plugin list and lastUpdated timestamp to local cache.
-func (r *RegistryClient) cacheList(list *RegistryList) error {
-	cachePath := r.getLocalCachePath()
-
-	// Cache the list.json
-	listData, err := json.Marshal(list)
-	if err != nil {
-		return fmt.Errorf("marshal list: %w", err)
+func findPluginInList(list *RegistryList, id string) *RemotePlugin {
+	for i := range list.Plugins {
+		if list.Plugins[i].ID == id {
+			p := remoteFromEntry(&list.Plugins[i], list.LastUpdated)
+			return &p
+		}
 	}
-
-	if err := os.WriteFile(cachePath+"/list.json", listData, 0o644); err != nil {
-		return fmt.Errorf("write cached list: %w", err)
-	}
-
-	// Cache the lastUpdated timestamp
-	lastUpdated := list.LastUpdated.Format("2006-01-02T15:04:05Z")
-	if err := os.WriteFile(cachePath+"/lastUpdated", []byte(lastUpdated), 0o644); err != nil {
-		return fmt.Errorf("write cached lastUpdated: %w", err)
-	}
-
-	fmt.Printf("DEBUG: Cached plugin list with timestamp: %s\n", lastUpdated)
 	return nil
 }
 
+// httpGet performs one GET and returns the body on HTTP 200.
+func (r *RegistryClient) httpGet(url string) ([]byte, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Kyvro-Launcher/0.1.0")
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, url)
+	}
+	return io.ReadAll(resp.Body)
+}
+
+// fetchLastUpdated reads the remote lastUpdated stamp (single ISO 8601 line).
+func (r *RegistryClient) fetchLastUpdated() (string, error) {
+	data, err := r.httpGet(r.registry + "/lastUpdated")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// fetchFullList downloads the complete list.json, caching it on success;
+// when that fails it falls back to the repository-local plugins/list.json.
+func (r *RegistryClient) fetchFullList() ([]RemotePlugin, error) {
+	data, err := r.httpGet(r.listURL)
+	if err == nil {
+		var list *RegistryList
+		list, err = decodeList(data)
+		if err == nil {
+			if cerr := r.cacheList(list); cerr != nil {
+				log.Printf("registry: cache list: %v", cerr)
+			}
+			return remoteFromList(list), nil
+		}
+	}
+	log.Printf("registry: fetch %s failed (%v), falling back to local list", r.listURL, err)
+
+	local, lerr := r.fetchLocalList()
+	if lerr != nil {
+		return nil, fmt.Errorf("fetch registry: %w", lerr)
+	}
+	return remoteFromList(&local), nil
+}
+
+// fetchLocalList reads a development list.json from the working directory's
+// plugins/ tree (used only when the network is unreachable).
 func (r *RegistryClient) fetchLocalList() (RegistryList, error) {
 	var list RegistryList
-
-	// Try to find list.json in local plugins directory
-	paths := []string{
-		"./plugins/list.json",
-		"../plugins/list.json",
-		"../../plugins/list.json",
-	}
-
-	fmt.Printf("DEBUG: Trying to load local list.json from paths: %v\n", paths)
-	for _, path := range paths {
-		fmt.Printf("DEBUG: Trying path: %s\n", path)
-		if data, err := os.ReadFile(path); err == nil {
-			fmt.Printf("DEBUG: Successfully read file from %s\n", path)
-			if err := json.Unmarshal(data, &list); err == nil {
-				fmt.Printf("DEBUG: Successfully parsed JSON with %d plugins\n", len(list.Plugins))
-				return list, nil
-			} else {
-				fmt.Printf("DEBUG: Failed to parse JSON: %v\n", err)
-			}
-		} else {
-			fmt.Printf("DEBUG: Failed to read file: %v\n", err)
-		}
-	}
-
-	fmt.Printf("DEBUG: No local list.json found in any path\n")
-	return list, fmt.Errorf("no local list.json found")
-}
-
-func (r *RegistryClient) convertToList(list *RegistryList) ([]RemotePlugin, error) {
-	fmt.Printf("DEBUG: convertToList called with %d plugins\n", len(list.Plugins))
-	// Convert registry plugins to remote plugins
-	plugins := make([]RemotePlugin, 0, len(list.Plugins))
-	for _, rp := range list.Plugins {
-		fmt.Printf("DEBUG: Processing plugin: %s (version %s)\n", rp.ID, rp.Version)
-
-		// Generate download URL for the latest version
-		// Format: https://raw.githubusercontent.com/kyvro/plugins/main/{plugin-id}/{plugin-id}-{version}.zip
-		if len(rp.Versions) == 0 {
-			fmt.Printf("DEBUG: Skipping plugin %s - no versions available\n", rp.ID)
+	for _, p := range []string{"plugins/list.json", "../plugins/list.json", "../../plugins/list.json"} {
+		data, err := os.ReadFile(p)
+		if err != nil {
 			continue
 		}
-
-		latestVersion := rp.Version // Use the version field as latest
-		downloadURL := fmt.Sprintf("https://raw.githubusercontent.com/kyvro/plugins/main/%s/%s-%s.zip",
-			rp.ID, rp.ID, latestVersion)
-
-		plugin := RemotePlugin{
-			ID:             rp.ID,
-			Name:           rp.Name,
-			Version:        rp.Version,
-			Description:    rp.Description,
-			Author:         rp.Author,
-			DownloadURL:    downloadURL,
-			UpdatedAt:      list.LastUpdated,
-			MinHostVersion:  rp.MinHostVersion,
-			Permissions:    rp.Permissions,
-			Platforms:      rp.Platforms,
-			Category:       rp.Category,
-			Keywords:       rp.Keywords,
-			Stats:          rp.Stats,
+		decoded, derr := decodeList(data)
+		if derr != nil {
+			log.Printf("registry: local %s: %v", p, derr)
+			continue
 		}
-
-		fmt.Printf("DEBUG: Created plugin entry: %s with download URL %s\n", plugin.ID, plugin.DownloadURL)
-		plugins = append(plugins, plugin)
+		return *decoded, nil
 	}
-
-	fmt.Printf("DEBUG: Returning %d plugins from convertToList\n", len(plugins))
-	return plugins, nil
+	return list, fmt.Errorf("no readable list.json found in local plugins/ tree")
 }
 
-// FetchPlugin retrieves metadata for a specific plugin by ID.
-func (r *RegistryClient) FetchPlugin(id string) (*RemotePlugin, error) {
-	var list RegistryList
-	var err error
-
-	// Try HTTP fetch first
-	if r.listURL != "" {
-		req, err := http.NewRequest("GET", r.listURL, nil)
-		if err == nil {
-			req.Header.Set("User-Agent", "Kyvro-Launcher/0.1.0")
-
-			resp, err := r.client.Do(req)
-			if err == nil {
-				defer resp.Body.Close()
-
-				if resp.StatusCode == http.StatusOK {
-					err = json.NewDecoder(resp.Body).Decode(&list)
-					if err == nil {
-						return r.findPluginInList(&list, id)
-					}
-				}
-			}
-		}
-	}
-
-	// Fallback to local file
-	list, err = r.fetchLocalList()
+// getLocalCachedLastUpdated reads the cached lastUpdated stamp.
+func (r *RegistryClient) getLocalCachedLastUpdated() string {
+	data, err := os.ReadFile(filepath.Join(r.getLocalCachePath(), "lastUpdated"))
 	if err != nil {
-		return nil, fmt.Errorf("fetch registry: %w", err)
+		return ""
 	}
-
-	return r.findPluginInList(&list, id)
+	return strings.TrimSpace(string(data))
 }
 
-func (r *RegistryClient) findPluginInList(list *RegistryList, id string) (*RemotePlugin, error) {
-	// Find the specific plugin
-	for _, rp := range list.Plugins {
-		if rp.ID == id {
-			if len(rp.Versions) == 0 {
-				return nil, fmt.Errorf("plugin %s has no versions available", id)
-			}
-
-			// Use the version field as latest
-			latestVersion := rp.Version
-			downloadURL := fmt.Sprintf("https://raw.githubusercontent.com/kyvro/plugins/main/%s/%s-%s.zip",
-				rp.ID, rp.ID, latestVersion)
-
-			return &RemotePlugin{
-				ID:             rp.ID,
-				Name:           rp.Name,
-				Version:        rp.Version,
-				Description:    rp.Description,
-				Author:         rp.Author,
-				DownloadURL:    downloadURL,
-				UpdatedAt:      list.LastUpdated,
-				MinHostVersion:  rp.MinHostVersion,
-				Permissions:    rp.Permissions,
-				Platforms:      rp.Platforms,
-				Category:       rp.Category,
-				Keywords:       rp.Keywords,
-				Stats:          rp.Stats,
-			}, nil
-		}
+// getCachedList converts the locally cached list.json into the client view.
+func (r *RegistryClient) getCachedList() ([]RemotePlugin, error) {
+	data, err := os.ReadFile(filepath.Join(r.getLocalCachePath(), "list.json"))
+	if err != nil {
+		return nil, fmt.Errorf("read cached list: %w", err)
 	}
+	list, err := decodeList(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse cached list: %w", err)
+	}
+	return remoteFromList(list), nil
+}
 
-	return nil, fmt.Errorf("plugin %s not found in registry", id)
+// cacheList stores list.json and its lastUpdated stamp for the incremental
+// check on the next startup.
+func (r *RegistryClient) cacheList(list *RegistryList) error {
+	dir := r.getLocalCachePath()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create cache dir: %w", err)
+	}
+	data, err := json.Marshal(list)
+	if err != nil {
+		return fmt.Errorf("marshal list: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "list.json"), data, 0o644); err != nil {
+		return fmt.Errorf("write cached list: %w", err)
+	}
+	stamp := []byte(list.LastUpdated.Format(time.RFC3339))
+	if err := os.WriteFile(filepath.Join(dir, "lastUpdated"), stamp, 0o644); err != nil {
+		return fmt.Errorf("write cached lastUpdated: %w", err)
+	}
+	return nil
+}
+
+// getLocalCachePath is the directory shared with the rest of the app data.
+func (r *RegistryClient) getLocalCachePath() string {
+	if r.cacheDir != "" {
+		return r.cacheDir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "."
+	}
+	return filepath.Join(home, "Library", "Application Support", "Kyvro")
 }

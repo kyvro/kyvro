@@ -1,6 +1,6 @@
-// minimal.js: onAction only — no provider, so live search never routes here.
+// minimal.js: activate only — no onAction export. Loading must succeed
+// (activate-only plugins are valid), but RunAction must report
+// INVALID_ARGUMENT.
 module.exports = {
-  onAction: function () {
-    return [];
-  }
+  activate: function () {}
 };
