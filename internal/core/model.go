@@ -35,6 +35,8 @@ const (
 	ActionOpenPath
 	// ActionRevealPath reveals a filesystem path in Finder.
 	ActionRevealPath
+	// ActionPluginView opens a plugin-defined detail page in the launcher.
+	ActionPluginView
 )
 
 // Action is the executable payload attached to a search result.

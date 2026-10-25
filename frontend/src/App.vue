@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { Events, Window } from "@wailsio/runtime";
-import { Search, Execute } from "../bindings/kyvro/service/searchservice";
+import { Search, Execute, OpenPluginView, PluginViewEvent, ClosePluginView } from "../bindings/kyvro/service/searchservice";
+import { ActionKind } from "../bindings/kyvro/internal/core/models";
+import type { ViewPage } from "../bindings/kyvro/internal/plugin/models";
+import PluginViewNode from "./PluginViewNode.vue";
 import type { SearchResult } from "../bindings/kyvro/internal/core/models";
 import Settings from "./Settings.vue";
 import { monogramStyle } from "./monogram";
@@ -21,6 +24,10 @@ const viewStack = ref<SearchResult[][]>([]);
 const selected = ref(0);
 const inputEl = ref<HTMLInputElement | null>(null);
 const error = ref("");
+const detail = ref<ViewPage | null>(null);
+const detailEl = ref<HTMLElement | null>(null);
+const detailBusy = ref(false);
+let actionPending = false;
 
 let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 let seq = 0; // guards out-of-order search responses
@@ -61,6 +68,7 @@ function onInput() {
 // reset blanks the UI. It must only run while the window is invisible
 // (on hide, or defensively on summon) so the clear never paints.
 function reset() {
+  closeDetail();
   seq++; // invalidate in-flight responses
   query.value = "";
   results.value = [];
@@ -73,22 +81,83 @@ function reset() {
 // given ID). Plugin actions may return a secondary result list, which
 // pushes a new view (window stays visible); an empty list ends the
 // interaction like any terminal action.
-async function activate(index: number, actionID = "") {
+async function activate(index: number, actionID = "", replace = false) {
   const r = results.value[index];
-  if (!r) return;
+  if (!r || actionPending) return;
+  actionPending = true;
+  const mine = seq;
   try {
+    const action = actionID ? r.Actions?.find((item) => item.ID === actionID)?.Action : r.PrimaryAction;
+    if (action?.Kind === ActionKind.ActionPluginView) {
+      clearTimeout(debounceTimer);
+      const page = await OpenPluginView(r.ID, actionID);
+      if (mine !== seq) { void ClosePluginView(page.SessionID); return; }
+      seq++;
+      detail.value = page;
+      error.value = "";
+      await nextTick();
+      detailEl.value?.focus();
+      return;
+    }
     const res = await Execute(r.ID, actionID);
+    if (mine !== seq) return;
     if (res && res.length > 0) {
       seq++; // drop any in-flight search so it cannot overwrite the view
-      viewStack.value.push(results.value);
+      if (!replace) viewStack.value.push(results.value);
       results.value = res;
       selected.value = 0;
       return;
     }
     await Window.Hide();
   } catch (e) {
-    error.value = String(e);
+    if (mine === seq) error.value = String(e);
+  } finally {
+    actionPending = false;
   }
+}
+
+function closeDetail() {
+  if (detail.value) void ClosePluginView(detail.value.SessionID);
+  detail.value = null;
+}
+
+function backFromDetail() {
+  seq++;
+  closeDetail();
+  error.value = "";
+  void nextTick(() => inputEl.value?.focus());
+}
+
+async function runViewEvent(event: string) {
+  if (!detail.value || detailBusy.value) return;
+  const session = detail.value.SessionID;
+  const mine = seq;
+  detailBusy.value = true;
+  try {
+    const page = await PluginViewEvent(session, event);
+    if (mine === seq && detail.value?.SessionID === session) {
+      detail.value = page;
+      error.value = "";
+    }
+  } catch (e) {
+    if (mine === seq) error.value = String(e);
+  } finally {
+    detailBusy.value = false;
+  }
+}
+
+function onDetailKeydown(e: KeyboardEvent) {
+  if (!detail.value) return;
+  if (e.key === "Escape") {
+    e.preventDefault();
+    backFromDetail();
+    return;
+  }
+  if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+  if (e.key === "Enter" && e.target instanceof HTMLButtonElement) return;
+  const key = e.key === "ArrowLeft" ? "left" : e.key === "ArrowRight" ? "right" : e.key === "Enter" ? "enter" : "";
+  const event = detail.value?.Definition.shortcuts?.[key];
+  if (event) { e.preventDefault(); void runViewEvent(event); }
 }
 
 function scrollSelectedIntoView() {
@@ -119,6 +188,14 @@ function onKeydown(e: KeyboardEvent) {
     return;
   }
   switch (e.key) {
+    case "ArrowLeft":
+    case "ArrowRight": {
+      if (viewStack.value.length === 0) break;
+      const shortcut = e.key === "ArrowLeft" ? "left" : "right";
+      const item = results.value[selected.value]?.Actions?.find((a) => a.Shortcut === shortcut);
+      if (item) { e.preventDefault(); void activate(selected.value, item.ID, true); }
+      break;
+    }
     case "ArrowDown":
       if (selected.value < results.value.length - 1) selected.value++;
       e.preventDefault();
@@ -133,6 +210,7 @@ function onKeydown(e: KeyboardEvent) {
       void activate(selected.value);
       break;
     case "Escape":
+      seq++;
       if (viewStack.value.length > 0) {
         results.value = viewStack.value.pop()!;
         selected.value = 0;
@@ -178,6 +256,7 @@ function isPluginResult(r: SearchResult) {
 
 onMounted(() => {
   window.addEventListener("hashchange", onHashChange);
+  window.addEventListener("keydown", onDetailKeydown);
   offShown = Events.On("kyvro:shown", () => {
     reset();
     void nextTick(() => inputEl.value?.focus());
@@ -194,9 +273,11 @@ function onVisibility() {
 
 onBeforeUnmount(() => {
   window.removeEventListener("hashchange", onHashChange);
+  window.removeEventListener("keydown", onDetailKeydown);
   offShown?.();
   document.removeEventListener("visibilitychange", onVisibility);
   clearTimeout(debounceTimer);
+  closeDetail();
 });
 </script>
 
@@ -206,6 +287,23 @@ onBeforeUnmount(() => {
     v-else
     class="flex h-screen flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#1b1b20]/75 shadow-2xl backdrop-blur-xl"
   >
+    <section v-if="detail" ref="detailEl" tabindex="-1" aria-label="Plugin detail"
+      class="flex min-h-0 flex-1 flex-col outline-none">
+      <header class="flex h-[68px] shrink-0 items-center gap-4 border-b border-white/10 px-5">
+        <button type="button" class="rounded-lg px-2 py-1 text-sm text-white/60 hover:bg-white/10"
+          @click="backFromDetail">← Back</button>
+        <h1 class="truncate text-lg text-white/90">{{ detail.Definition.title || 'Plugin detail' }}</h1>
+        <span v-if="detailBusy" role="status" class="ml-auto text-xs text-white/40">Loading…</span>
+      </header>
+      <div class="min-h-0 flex-1 overflow-y-auto p-5">
+        <PluginViewNode :node="detail.Definition.root" :busy="detailBusy" @action="runViewEvent" />
+        <p v-if="error" role="alert" class="mt-4 text-sm text-red-300">{{ error }}</p>
+      </div>
+      <footer class="border-t border-white/10 px-5 py-3 text-xs text-white/40">
+        Esc back <span v-if="detail.Definition.shortcuts?.left || detail.Definition.shortcuts?.right" class="ml-4">← / → switch</span>
+      </footer>
+    </section>
+    <template v-else>
     <!-- Search input -->
     <div class="flex h-[68px] shrink-0 items-center gap-3.5 border-b border-white/10 px-5">
       <svg
@@ -366,5 +464,6 @@ onBeforeUnmount(() => {
       <span>Kyvro</span>
       <span class="tracking-wide">↑↓ navigate&nbsp;&nbsp;↵ open&nbsp;&nbsp;<template v-if="viewStack.length">esc back&nbsp;&nbsp;</template>esc hide</span>
     </div>
+    </template>
   </div>
 </template>

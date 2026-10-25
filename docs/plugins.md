@@ -10,16 +10,16 @@
 |-----|-----|-----|
 | Manifest | `plugin.json`（schemaVersion 1） | 静态声明：身份、入口、命令（触发）、权限 |
 | 命令 | manifest `commands[]` | 唯一扩展类型；`prefix` 自描述触发，prefix 建入命令索引（建立/移除时机见 [index.md](./index.md)） |
-| 统一接口 | `module.exports.onAction` | 唯一业务入口，所有调用来源共用 |
+| 统一接口 | `module.exports.onAction` | 列表业务入口；详情走 `renderView` / `onViewEvent` |
 | 生命周期钩子 | `module.exports.activate` | 加载时执行一次，非扩展类型接口 |
-| 结果行 | `ResultRow[]` | 所有调用返回的结果条目 |
-| 动作 | `PluginAction` | `open-url` / `copy` / `callback`，由宿主执行 |
-| 上下文 | `activate(ctx)` 参数 | `storage` / `log` 能力面 |
+| 结果行 | `ResultRow[]` | 搜索 / callback 调用返回的结果条目 |
+| 动作 | `PluginAction` | `open-url` / `copy` / `callback` / `open-view`，由宿主执行 |
+| 上下文 | `activate(ctx)` 参数 | `storage` / `log` / `background` / `network` / `ui` 能力面 |
 | 权限 | manifest `permissions` | 决定 ctx 上注入哪些能力 |
 | 错误码 | `PluginError` | 所有失败的统一错误契约 |
 | 生命周期 | 超时与禁用规则 | 按调用来源分配时间预算 |
 
-每个插件运行在独立沙箱（独立 JS VM，无宿主 API 直通）。一个插件 = N 个命令 + 1 个业务入口。
+每个插件运行在独立沙箱（独立 JS VM，无宿主 API 直通）。一个插件可包含多个命令和详情视图。
 
 ## 1. 扩展类型：Command
 
@@ -119,7 +119,7 @@ CommonJS（无 `require` / ESM）；返回值支持同步或 Promise。
 
 | 导出 | 签名 | 说明 |
 |-----|-----|-----|
-| `onAction` | `(actionId, args: string[]) => ResultRow[] \| Promise` | **唯一业务入口**。三种调用来源见 §3 |
+| `onAction` | `(actionId, args: string[]) => ResultRow[] \| Promise` | **列表业务入口**。调用来源见 §3 |
 | `activate` | `(ctx) => void \| Promise` | 生命周期钩子，加载时执行一次（唯一生命周期回调，无卸载回调，见 §9）；非扩展类型接口 |
 
 ## 5. 结果行与动作
@@ -146,7 +146,8 @@ CommonJS（无 `require` / ESM）；返回值支持同步或 Promise。
 |-----|-----|-----|
 | `open-url` | `url` | 用用户设置的浏览器打开 URL |
 | `copy` | `value` | 复制文本到剪贴板 |
-| `callback` | `id`、`args?` | 调用 `onAction(id, args ?? [])`，返回下一级列表；其余动作执行后隐藏窗口 |
+| `open-view` | `id`、`args?` | 当前窗口切换为插件布局详情页，见 §13 |
+| `callback` | `id`、`args?` | 调用 `onAction(id, args ?? [])`，返回下一级列表；`open-url` / `copy` 执行后隐藏窗口 |
 
 ## 6. 上下文（PluginContext）
 
@@ -164,7 +165,8 @@ manifest `permissions` 声明 `<capability>` 或 `<capability>:<scope>` 形式�
 | capability | 状态 | 行为 |
 |-----|-----|-----|
 | `storage` | ✅ 实现 | 声明即授权，注入 `ctx.storage` |
-| `network` / `filesystem` / `shell` / `clipboard` / `secrets` / `background` / `system` | ⏳ 保留 | API 不注入；调用返回 `CAPABILITY_UNAVAILABLE` |
+| `network:<hostname>` / `background` | ✅ 实现 | 声明即授权，见 §12 |
+| `filesystem` / `shell` / `clipboard` / `secrets` / `system` | ⏳ 保留 | API 不注入；调用返回 `CAPABILITY_UNAVAILABLE` |
 | 未知能力 | — | `PERMISSION_DENIED` |
 
 三态校验语义、授权策略、Trust Level 与 Capability 演进方向见 [permissions.md](./permissions.md)。
@@ -181,8 +183,8 @@ manifest `permissions` 声明 `<capability>` 或 `<capability>:<scope>` 形式�
 | `CAPABILITY_UNAVAILABLE` | 宿主版本未提供该能力 |
 | `TIMEOUT` | 超出调用预算（见 §3 / §9） |
 | `PLUGIN_EXCEPTION` | JS 异常 / panic |
-| `NETWORK_BLOCKED` | 预留（网络域名策略） |
-| `HOST_API_ERROR` | 预留（宿主 API 内部错误） |
+| `NETWORK_BLOCKED` | URL 或重定向域名不在授权范围 |
+| `HOST_API_ERROR` | 网络传输、响应读取失败或超限 |
 
 ## 9. 生命周期与超时
 
@@ -193,12 +195,14 @@ activate(ctx)                  2s 预算
   ↓
 onAction（prefix live）        每次 150ms 软预算，迟到结果丢弃
 onAction（callback）           5s 预算
+renderView（打开详情）          5s 预算
+onViewEvent → renderView       合计 5s 预算
 ```
 
 - live 调用连续 3 次超时 → 自动禁用该插件；用户重新启用即恢复并清零计数；自动禁用不持久化，重启重新加载
 - 用户启用 / 禁用状态持久化，跨升级 / 重载保留
 - **协议不设卸载回调**：禁用 / 卸载 / 重载 / 退出时的清理由宿主负责，不依赖插件主动注销——命令索引、storage 等注册项均由宿主按插件 ID 回收或重建，沙箱 VM 直接销毁
-- 若未来扩展类型持有需释放的宿主资源（如常驻任务），停止语义由该类型自身接口契约定义，不是通用卸载回调（见 §1.1）
+- 若未来扩展类型持有需释放的宿主资源（如常驻任务，已实现的后台能力见 §12），停止语义由该类型自身接口契约定义，不是通用卸载回调（见 §1.1）
 
 ## 10. 最小示例
 
@@ -261,7 +265,147 @@ module.exports.onAction = (actionId, args) => {
 后续计划：
 
 - ESM / TypeScript 编译工具链（当前仅 CommonJS）
-- Match Handler / Action Provider / Background Service / Agent Tool 四类扩展——见 §1.1
+- Match Handler / Action Provider / Agent Tool 等扩展（后台定时能力已实现，见 §12）——见 §1.1
 - 权限实现扩展与 per-plugin 授权 UI——见 [permissions.md](./permissions.md#路线图)
-- 插件结果多 action 与自定义 UI
+- 自定义 HTML / 组件 UI（当前已提供列表、多 action、左右导航）
 - Secrets 管理
+
+## 12. 后台、网络与列表 UI
+
+SDK 类型：`plugin-sdk/index.d.ts`；示例：`plugins-example/com.example.capabilities/`。
+本阶段提供基础能力，尚未实现 CodexBar / 大模型 usage 插件。
+
+当前 JS API 不提供搜索索引更新能力；后台任务、网络刷新、storage 写入与列表导航均不触发索引更新。索引更新边界及后续变更约定见 [index.md §4.5](./index.md#45-插件-api-的索引边界与变更约定)。业务缓存可按需使用，搜索入口无需读取缓存。
+
+### 后台定时任务
+
+声明 `background` 权限，在 `activate(ctx)` 中调用：
+
+```js
+const task = ctx.background.every(60000, () => {
+  // 获取数据并写入 ctx.storage；搜索只读缓存。
+});
+// ctx.background.cancel(task);
+```
+
+间隔 1000–86400000ms，每插件最多 16 个任务，首次执行在一个间隔之后。
+回调可返回 Promise，每次最多 5s。同一 VM 串行执行，不重入，繁忙时不积压 tick。
+禁用暂停后续执行（已开始调用可完成），重新启用继续计时；卸载、重载、退出自动取消并回收。
+窗口隐藏时仍运行，仅应用进程运行期间有效。异常写宿主日志，不纳入搜索三次超时规则。
+
+### 网络请求
+
+声明 `network:api.github.com` 后注入 `ctx.network`；裸 `network` 默认不授权。
+精确匹配 hostname，不含端口、不支持通配符/隐式子域名；HTTP/HTTPS 均支持，每次重定向复检，最多 10 次。
+URL 内嵌用户名/密码被拒绝，无浏览器 cookie、凭证读取、自动重试或 cookie jar。
+
+```js
+const response = ctx.network.request("https://api.github.com/zen", {
+  method: "GET", headers: { "User-Agent": "Kyvro-Demo" }
+});
+if (response.ok) ctx.storage.set("cached", response.body);
+```
+
+同步 API，支持 `method`、`headers`、string `body`。
+返回 `{status, ok, headers, body}`，响应头键为小写；非 2xx 正常返回，JSON 使用 `JSON.parse(response.body)`。
+请求受当前调用剩余预算与最大 5s 限制；响应最多 2MiB。
+网络会阻塞本插件 VM，应在后台刷新或 Enter 回调中调用，避免搜索时发请求。
+域名未授权 / 重定向越界返回 `NETWORK_BLOCKED`，超时返回 `TIMEOUT`，传输或超限返回 `HOST_API_ERROR`。
+域名授权不包含私网地址或 DNS 解析过滤。
+
+### 列表 UI 与左右导航
+
+`ctx.ui.list(rows)` 无需权限，是标准列表的便利函数；插件布局详情使用 §13 的 `open-view` / `renderView`，不提供 HTML / DOM。
+`actions[0]` 是 Enter 主动作，其余合法动作转换为次级动作。
+次级动作可声明 `actionId`（行内唯一，缺省用 callback 的 `id`）、`title` 和 `shortcut`。
+快捷键支持 `left` / `right` / `cmd+enter` / `cmd+c`。
+左右键只在 Enter 后的详情列表生效，替换当前列表，不新增返回层级；Esc 返回入口。
+导航动作取自当前选中行，多行详情应为每行附上导航动作。
+
+```js
+return ctx.ui.list([{
+  id: "page", title: "Model A", subtitle: "示例数据",
+  actions: [
+    {type: "copy", value: "示例数据"},
+    {type: "callback", id: "page", actionId: "next", shortcut: "right", args: ["1"]}
+  ]
+}]);
+```
+
+### 运行 demo
+
+复制示例文件到 `~/Library/Application Support/Kyvro/plugins/com.example.capabilities/0.1.0/` 后重启，
+或把 `plugin.json` 和 `main.js` 打包 zip，通过设置的导入插件功能安装。
+输入 `plugdemo`，Enter 进入插件定义的详情页，左右键或按钮切换 Background / Network / Storage，Enter 或 Refresh now 手动刷新，Esc 返回搜索结果。
+每 60s 后台请求公开 GitHub Zen 接口，展示缓存和更新时间，无需 API Key。
+
+## 13. 插件布局详情页（open-view）
+
+### 打开与返回
+
+`onAction` 返回搜索行时使用新 action；它不调用 `onAction`，而是调用该插件的 `renderView`：
+
+```js
+module.exports.onAction = () => [{
+  id: "entry", title: "Usage Demo",
+  actions: [{ type: "open-view", id: "usage-detail", args: [] }]
+}];
+```
+
+Enter / 点击后在当前窗口以详情页替换搜索输入和结果列表。详情具有宿主 Back 按钮，Esc 返回之前的列表、查询和选中位置。
+仅支持当前窗口，不创建新窗口。插件不能覆盖 Esc，也不能修改宿主搜索索引。
+普通 `callback` 仍返回下一级标准列表，`open-url` / `copy` 保持原有行为。
+
+### 布局协议
+
+```js
+let selectedModel = 0;
+module.exports.renderView = (viewId, args) => ({
+  title: "Usage Demo",
+  shortcuts: { left: "previous", right: "next" },
+  root: {
+    type: "column", gap: "large", children: [
+      { type: "card", title: "Model " + (selectedModel + 1), children: [
+        { type: "text", text: "示例数据，并非真实用量", tone: "muted" },
+        { type: "progress", title: "已使用", value: 65, max: 100 }
+      ] },
+      { type: "row", children: [
+        { type: "button", text: "上一个", event: "previous" },
+        { type: "button", text: "下一个", event: "next" }
+      ] }
+    ]
+  }
+});
+module.exports.onViewEvent = (viewId, eventId, args) => {
+  if (eventId === "next") selectedModel = (selectedModel + 1) % 3;
+  if (eventId === "previous") selectedModel = (selectedModel + 2) % 3;
+};
+```
+
+布局由插件定义，宿主渲染固定组件：
+
+| type | 字段 | 行为 |
+|---|---|---|
+| `column` | `children?`、`gap?`、`title?` | 纵向排列 |
+| `row` | `children?`、`gap?`、`title?` | 横向排列，空间不足换行 |
+| `card` | `children?`、`gap?`、`title?` | 带背景和边框的卡片 |
+| `text` | `text`、`tone?` | 转义文本，可换行 |
+| `progress` | `value`、`max`、`title?` | 进度条；`max > 0`、`0 ≤ value ≤ max`，显示百分比 |
+| `button` | `text`、`event` | 点击发送声明的事件 ID |
+
+`gap`：`small` / `medium` / `large`，默认 medium。
+`tone`：`default` / `muted` / `success` / `warning` / `danger`。
+`shortcuts` 支持 `left` / `right` / `enter`，值是插件事件 ID；Tab 可聚焦按钮，按钮上的 Enter 优先点击按钮。
+不接收 HTML / DOM / 自定义 CSS / 可执行脚本；所有文本按普通文本渲染。
+
+### 事件、预算与会话
+
+- `renderView(viewId, args)` 返回 `ViewDefinition` 或 Promise；首次打开最多 5s。
+- `onViewEvent(viewId, eventId, args)` 修改插件状态，可返回 void / Promise；完成后宿主重新调用 `renderView`，两者共用一次 5s 预算。无需在事件处理器返回布局。
+- `args` 来自 `open-view` 的 action，事件期间保持不变；局部页面状态由插件管理。全局 `pluginContext` 是实例能力句柄，不是页面会话数据。
+- 左右键 / 按钮替换当前详情，不叠加导航层级；请求期间按钮禁用，重复事件忽略。出错保留当前页面并显示错误，仍可 Back / Esc 返回。
+- 后台刷新仅更新业务数据，不自动推送页面；下一次页面打开或事件后渲染读取最新数据。
+- 宿主仅允许从当前结果会话中的 `open-view` 动作打开详情，后续事件使用随机会话 ID；只接受当前页面声明的按钮 / 快捷键事件。新页面替换旧会话；关闭后会话失效；插件禁用期间拒绝事件，重载/卸载后旧 VM 会话失效。
+- 页面最多 256 个节点、嵌套深度 16、JSON 256KiB；单文本最多 16384 字节，标题最多 1024 字节，事件 ID 最多 128 字节。非法组件树返回 `INVALID_ARGUMENT`。
+
+详情 API 和会话均为内存状态，不增加搜索索引更新接口、不写索引文件，边界见 [index.md §4.5](./index.md#45-插件-api-的索引边界与变更约定)。

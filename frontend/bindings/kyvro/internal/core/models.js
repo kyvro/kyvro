@@ -175,6 +175,11 @@ export const ActionKind = {
      * ActionRevealPath reveals a filesystem path in Finder.
      */
     ActionRevealPath: 5,
+
+    /**
+     * ActionPluginView opens a plugin-defined detail page in the launcher.
+     */
+    ActionPluginView: 6,
 };
 
 /**
@@ -219,16 +224,16 @@ export class FolderSource {
         if (!("CreatedAt" in $$source)) {
             /**
              * @member
-             * @type {Date}
+             * @type {string}
              */
-            this["CreatedAt"] = new Date("0001-01-01T00:00:00.000Z");
+            this["CreatedAt"] = "0001-01-01T00:00:00.000Z";
         }
         if (!("UpdatedAt" in $$source)) {
             /**
              * @member
-             * @type {Date}
+             * @type {string}
              */
-            this["UpdatedAt"] = new Date("0001-01-01T00:00:00.000Z");
+            this["UpdatedAt"] = "0001-01-01T00:00:00.000Z";
         }
 
         Object.assign(this, $$source);
@@ -240,15 +245,7 @@ export class FolderSource {
      * @returns {FolderSource}
      */
     static createFrom($$source = {}) {
-        const $$createField4_0 = $Create.DateFromTime;
-        const $$createField5_0 = $Create.DateFromTime;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("CreatedAt" in $$parsedSource) {
-            $$parsedSource["CreatedAt"] = $$createField4_0($$parsedSource["CreatedAt"]);
-        }
-        if ("UpdatedAt" in $$parsedSource) {
-            $$parsedSource["UpdatedAt"] = $$createField5_0($$parsedSource["UpdatedAt"]);
-        }
         return new FolderSource(/** @type {Partial<FolderSource>} */($$parsedSource));
     }
 }
@@ -289,9 +286,9 @@ export class FolderSourceInfo {
         if (!("LastScannedAt" in $$source)) {
             /**
              * @member
-             * @type {Date}
+             * @type {string}
              */
-            this["LastScannedAt"] = new Date("0001-01-01T00:00:00.000Z");
+            this["LastScannedAt"] = "0001-01-01T00:00:00.000Z";
         }
         if (!("LastScanError" in $$source)) {
             /**
@@ -318,13 +315,9 @@ export class FolderSourceInfo {
      */
     static createFrom($$source = {}) {
         const $$createField0_0 = $$createType2;
-        const $$createField3_0 = $Create.DateFromTime;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("Source" in $$parsedSource) {
             $$parsedSource["Source"] = $$createField0_0($$parsedSource["Source"]);
-        }
-        if ("LastScannedAt" in $$parsedSource) {
-            $$parsedSource["LastScannedAt"] = $$createField3_0($$parsedSource["LastScannedAt"]);
         }
         return new FolderSourceInfo(/** @type {Partial<FolderSourceInfo>} */($$parsedSource));
     }
@@ -490,7 +483,7 @@ export class Snippet {
             /**
              * CreatedAt is when this snippet was created.
              * @member
-             * @type {Date | undefined}
+             * @type {string | undefined}
              */
             this["createdAt"] = undefined;
         }
@@ -512,11 +505,7 @@ export class Snippet {
      * @returns {Snippet}
      */
     static createFrom($$source = {}) {
-        const $$createField2_0 = $Create.DateFromTime;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("createdAt" in $$parsedSource) {
-            $$parsedSource["createdAt"] = $$createField2_0($$parsedSource["createdAt"]);
-        }
         return new Snippet(/** @type {Partial<Snippet>} */($$parsedSource));
     }
 }

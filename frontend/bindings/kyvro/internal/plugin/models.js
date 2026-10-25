@@ -241,7 +241,7 @@ export class RemotePlugin {
         if (/** @type {any} */(false)) {
             /**
              * @member
-             * @type {Date | undefined}
+             * @type {string | undefined}
              */
             this["updated_at"] = undefined;
         }
@@ -270,15 +270,11 @@ export class RemotePlugin {
      */
     static createFrom($$source = {}) {
         const $$createField4_0 = $$createType1;
-        const $$createField6_0 = $Create.DateFromTime;
         const $$createField7_0 = $$createType0;
         const $$createField8_0 = $$createType0;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("author" in $$parsedSource) {
             $$parsedSource["author"] = $$createField4_0($$parsedSource["author"]);
-        }
-        if ("updated_at" in $$parsedSource) {
-            $$parsedSource["updated_at"] = $$createField6_0($$parsedSource["updated_at"]);
         }
         if ("permissions" in $$parsedSource) {
             $$parsedSource["permissions"] = $$createField7_0($$parsedSource["permissions"]);
@@ -290,6 +286,195 @@ export class RemotePlugin {
     }
 }
 
+export class ViewDefinition {
+    /**
+     * Creates a new ViewDefinition instance.
+     * @param {Partial<ViewDefinition>} [$$source = {}] - The source object to create the ViewDefinition.
+     */
+    constructor($$source = {}) {
+        if (!("title" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["title"] = "";
+        }
+        if (!("root" in $$source)) {
+            /**
+             * @member
+             * @type {ViewNode | null}
+             */
+            this["root"] = null;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {{ [_ in string]?: string } | undefined}
+             */
+            this["shortcuts"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ViewDefinition instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ViewDefinition}
+     */
+    static createFrom($$source = {}) {
+        const $$createField1_0 = $$createType3;
+        const $$createField2_0 = $$createType4;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("root" in $$parsedSource) {
+            $$parsedSource["root"] = $$createField1_0($$parsedSource["root"]);
+        }
+        if ("shortcuts" in $$parsedSource) {
+            $$parsedSource["shortcuts"] = $$createField2_0($$parsedSource["shortcuts"]);
+        }
+        return new ViewDefinition(/** @type {Partial<ViewDefinition>} */($$parsedSource));
+    }
+}
+
+/**
+ * ViewNode is a declarative component, never HTML, CSS or executable code.
+ */
+export class ViewNode {
+    /**
+     * Creates a new ViewNode instance.
+     * @param {Partial<ViewNode>} [$$source = {}] - The source object to create the ViewNode.
+     */
+    constructor($$source = {}) {
+        if (!("type" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["type"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["text"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["title"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["tone"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["gap"] = undefined;
+        }
+        if (!("value" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["value"] = 0;
+        }
+        if (!("max" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["max"] = 0;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["event"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {(ViewNode | null)[] | undefined}
+             */
+            this["children"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ViewNode instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ViewNode}
+     */
+    static createFrom($$source = {}) {
+        const $$createField8_0 = $$createType5;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("children" in $$parsedSource) {
+            $$parsedSource["children"] = $$createField8_0($$parsedSource["children"]);
+        }
+        return new ViewNode(/** @type {Partial<ViewNode>} */($$parsedSource));
+    }
+}
+
+/**
+ * ViewPage carries an opaque session ID; events can only target the active page.
+ */
+export class ViewPage {
+    /**
+     * Creates a new ViewPage instance.
+     * @param {Partial<ViewPage>} [$$source = {}] - The source object to create the ViewPage.
+     */
+    constructor($$source = {}) {
+        if (!("SessionID" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["SessionID"] = "";
+        }
+        if (!("Definition" in $$source)) {
+            /**
+             * @member
+             * @type {ViewDefinition | null}
+             */
+            this["Definition"] = null;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ViewPage instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ViewPage}
+     */
+    static createFrom($$source = {}) {
+        const $$createField1_0 = $$createType7;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("Definition" in $$parsedSource) {
+            $$parsedSource["Definition"] = $$createField1_0($$parsedSource["Definition"]);
+        }
+        return new ViewPage(/** @type {Partial<ViewPage>} */($$parsedSource));
+    }
+}
+
 // Private type creation functions
 const $$createType0 = $Create.Array($Create.Any);
 const $$createType1 = Author.createFrom;
+const $$createType2 = ViewNode.createFrom;
+const $$createType3 = $Create.Nullable($$createType2);
+const $$createType4 = $Create.Map($Create.Any, $Create.Any);
+const $$createType5 = $Create.Array($$createType3);
+const $$createType6 = ViewDefinition.createFrom;
+const $$createType7 = $Create.Nullable($$createType6);

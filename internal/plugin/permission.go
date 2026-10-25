@@ -4,29 +4,26 @@ import "strings"
 
 // unimplemented lists permission capabilities the host knows how to parse
 // but does not implement in this version. Calling into any of them yields
-// CAPABILITY_UNAVAILABLE. V1 only implements "storage".
+// CAPABILITY_UNAVAILABLE.
 var unimplemented = map[string]bool{
-	"network":    true,
 	"filesystem": true,
 	"shell":      true,
 	"clipboard":  true,
 	"secrets":    true,
-	"background": true,
 	"system":     true,
 }
 
 // GrantDecision decides which of a plugin's requested permissions are
 // granted. It returns the subset of requested names that should be granted.
-// A nil GrantDecision applies the V1 default policy: every requested
-// "storage" permission is granted, everything else is not. Reserved for the
+// A nil GrantDecision grants declared storage, background and scoped network. Reserved for the
 // settings UI so per-plugin grants can be wired in without refactoring.
 type GrantDecision func(pluginID string, requested []string) []string
 
-// defaultGrant grants storage-only (V1 policy).
+// defaultGrant grants the implemented, manifest-declared capabilities.
 func defaultGrant(_ string, requested []string) []string {
 	var out []string
 	for _, name := range requested {
-		if permissionBase(name) == "storage" {
+		if permissionBase(name) == "storage" || name == "background" || strings.HasPrefix(name, "network:") {
 			out = append(out, name)
 		}
 	}
@@ -43,7 +40,7 @@ func permissionBase(name string) string {
 }
 
 // PermissionSet is the resolved permission state of one loaded plugin:
-// default-deny, storage grants in V1. It is safe for concurrent use.
+// default-deny, with explicit manifest grants. It is safe for concurrent use.
 type PermissionSet struct {
 	granted map[string]bool // exact names granted to the plugin
 }
@@ -56,7 +53,9 @@ func ParsePermissions(pluginID string, requested []string, grant GrantDecision) 
 	}
 	allowed := make(map[string]bool, len(requested))
 	for _, name := range grant(pluginID, requested) {
-		allowed[name] = true
+		if contains(requested, name) {
+			allowed[name] = true
+		}
 	}
 	return &PermissionSet{granted: allowed}
 }

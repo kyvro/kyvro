@@ -40,7 +40,16 @@ type jsRuntime struct {
 	storage  *PluginStorage // non-nil only with a granted storage permission
 	iconPath string         // absolute path of the manifest icon ("" when none)
 
-	actionFn goja.Callable // exports.onAction (nil when absent)
+	perms             *PermissionSet
+	deadline          time.Time
+	backgroundEnabled atomic.Bool
+	tasksMu           sync.Mutex
+	tasks             map[int]chan struct{}
+	nextTask          int
+
+	renderViewFn goja.Callable
+	viewEventFn  goja.Callable
+	actionFn     goja.Callable // exports.onAction (nil when absent)
 
 	reqs     chan runtimeReq
 	quit     chan struct{}
@@ -65,7 +74,7 @@ type runtimeRes struct {
 // newRuntime loads main, evaluates the module, runs the optional activate
 // hook and starts the worker goroutine. dir is the resolved version
 // directory.
-func newRuntime(m *Manifest, dir string, storage *PluginStorage) (*jsRuntime, error) {
+func newRuntime(m *Manifest, dir string, storage *PluginStorage, permissions ...*PermissionSet) (*jsRuntime, error) {
 	src, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(m.Main)))
 	if err != nil {
 		return nil, Errorf(m.ID, ErrInvalidArgument, "read main %s: %v", m.Main, err)
@@ -79,6 +88,11 @@ func newRuntime(m *Manifest, dir string, storage *PluginStorage) (*jsRuntime, er
 		quit:     make(chan struct{}),
 		done:     make(chan struct{}),
 	}
+	r.perms = ParsePermissions(m.ID, m.Permissions, nil)
+	if len(permissions) > 0 {
+		r.perms = permissions[0]
+	}
+	r.tasks = make(map[int]chan struct{})
 	if m.Icon != "" {
 		if info, err := os.Stat(filepath.Join(dir, filepath.FromSlash(m.Icon))); err == nil && !info.IsDir() {
 			r.iconPath = filepath.Join(dir, filepath.FromSlash(m.Icon))
@@ -89,7 +103,11 @@ func newRuntime(m *Manifest, dir string, storage *PluginStorage) (*jsRuntime, er
 	if err != nil {
 		return nil, Errorf(m.ID, ErrPluginException, "compile %s: %v", m.Main, err)
 	}
-	if _, err := vm.RunProgram(prog); err != nil {
+	if err := runBounded(vm, activateTimeout, func(deadline time.Time) error {
+		r.deadline = deadline
+		_, err := vm.RunProgram(prog)
+		return err
+	}); err != nil {
 		return nil, wrapJS(m.ID, err)
 	}
 
@@ -109,6 +127,9 @@ func newRuntime(m *Manifest, dir string, storage *PluginStorage) (*jsRuntime, er
 		}
 	}
 
+	r.renderViewFn, _ = goja.AssertFunction(exports.Get("renderView"))
+	r.viewEventFn, _ = goja.AssertFunction(exports.Get("onViewEvent"))
+
 	if activate := exports.Get("activate"); !isAbsent(activate) {
 		fn, ok := goja.AssertFunction(activate)
 		if !ok {
@@ -116,6 +137,7 @@ func newRuntime(m *Manifest, dir string, storage *PluginStorage) (*jsRuntime, er
 		}
 		ctxObj := r.buildContext(vm)
 		if err := runBounded(vm, activateTimeout, func(deadline time.Time) error {
+			r.deadline = deadline
 			res, err := fn(goja.Undefined(), ctxObj)
 			if err != nil {
 				return err
@@ -123,6 +145,7 @@ func newRuntime(m *Manifest, dir string, storage *PluginStorage) (*jsRuntime, er
 			_, err = r.await(vm, res, deadline)
 			return err
 		}); err != nil {
+			r.stopTasks()
 			return nil, wrapJS(m.ID, err)
 		}
 	}
@@ -131,8 +154,7 @@ func newRuntime(m *Manifest, dir string, storage *PluginStorage) (*jsRuntime, er
 	return r, nil
 }
 
-// buildContext assembles the JS-visible PluginContext (V1: storage when
-// granted, plus logging). Unimplemented capability APIs are simply absent.
+// buildContext assembles the granted capabilities and permission-free UI/logging.
 func (r *jsRuntime) buildContext(vm *goja.Runtime) goja.Value {
 	ctx := vm.NewObject()
 	if r.storage != nil {
@@ -175,6 +197,7 @@ func (r *jsRuntime) buildContext(vm *goja.Runtime) goja.Value {
 		})
 	}
 	ctx.Set("log", lg)
+	r.installCapabilities(vm, ctx)
 
 	return ctx
 }
@@ -200,6 +223,7 @@ func runBounded(vm *goja.Runtime, timeout time.Duration, f func(deadline time.Ti
 		return err
 	case <-timer.C:
 		vm.Interrupt("timeout")
+		<-res // Finish cleanup before the caller discards or reuses the VM.
 		return Errorf("", ErrTimeout, "timed out after %s", timeout)
 	}
 }
@@ -217,15 +241,17 @@ func (r *jsRuntime) call(ctx context.Context, timeout time.Duration, fn func(vm 
 		deadline: time.Now().Add(timeout),
 		res:      make(chan runtimeRes, 1), // buffered: the worker never blocks on dropped results
 	}
+	dispatchCtx, cancel := context.WithDeadline(ctx, req.deadline)
+	defer cancel()
 	select {
 	case r.reqs <- req:
 	case <-r.quit:
 		return nil, Errorf(r.pluginID, ErrPluginException, "runtime is shutting down")
-	case <-ctx.Done():
-		return nil, Errorf(r.pluginID, ErrTimeout, "cancelled before dispatch: %v", ctx.Err())
+	case <-dispatchCtx.Done():
+		return nil, Errorf(r.pluginID, ErrTimeout, "cancelled before dispatch: %v", dispatchCtx.Err())
 	}
 
-	timer := time.NewTimer(timeout)
+	timer := time.NewTimer(time.Until(req.deadline))
 	defer timer.Stop()
 	select {
 	case res := <-req.res:
@@ -285,6 +311,7 @@ func (r *jsRuntime) safeRun(req runtimeReq) (val any, err error) {
 			val, err = nil, Errorf(r.pluginID, ErrPluginException, "runtime panic: %v", x)
 		}
 	}()
+	r.deadline = req.deadline
 	return req.fn(r.vm, req.deadline)
 }
 
@@ -292,6 +319,7 @@ func (r *jsRuntime) safeRun(req runtimeReq) (val any, err error) {
 // later calls just wait on done.
 func (r *jsRuntime) Shutdown() {
 	r.stopOnce.Do(func() {
+		r.stopTasks()
 		r.quitMu.Lock()
 		close(r.quit)
 		r.vm.Interrupt("shutdown") // break any in-flight JS loop

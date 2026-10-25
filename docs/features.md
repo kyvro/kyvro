@@ -181,3 +181,12 @@ wails3 generate bindings -d frontend/bindings -clean -names
 - 文件索引 / Spotlight 集成
 - 设置界面扩展：热键自定义、插件权限粒度授权（当前仅插件启用/禁用）
 - Windows / Linux 平台实现
+
+### 插件能力扩展
+
+- `ctx.background.every/cancel`：定时 JS 回调，禁用暂停、启用恢复，卸载/重载/退出回收。
+- `ctx.network.request`：精确域名授权，重定向复检，调用预算超时与 2MiB 响应限制。
+- `ctx.ui.list`：宿主列表、多次级动作，详情左右切换，Esc 返回入口。
+- `plugins-example/com.example.capabilities`：后台刷新、HTTP、缓存与导航示例；大模型 usage 插件尚未实现。
+
+- 插件布局详情：`open-view` 在当前窗口切换详情；`renderView` 定义横纵布局、卡片、文本、进度条、按钮；`onViewEvent` 处理左右键和按钮，Back/Esc 返回原列表。详情渲染不更新索引。

@@ -113,7 +113,7 @@ Unimplemented capabilities are simply absent from the context — feature-detect
 
 ## Permissions
 
-Manifest permissions are `<capability>` or `<capability>:<scope>`. V1 grants `"storage"` only; other parsed capabilities (`network`, `filesystem`, `shell`, `clipboard`, `secrets`, `system`, `background`) never grant and their APIs do not exist on the context yet.
+Manifest permissions are `<capability>` or `<capability>:<scope>`. The host grants declared `storage`, `background`, and `network:<hostname>`. `ctx.ui.list` is always available. Other capabilities (`filesystem`, `shell`, `clipboard`, `secrets`, `system`) remain unavailable. See [the protocol](../docs/plugins.md#12-后台网络与列表-ui) and `plugins-example/com.example.capabilities` for timer, HTTP and keyboard navigation examples.
 
 ## Type Checking Without TypeScript
 
@@ -148,3 +148,5 @@ npm test        # tsc --noEmit over index.d.ts and type tests
 ```
 
 See `CHANGELOG.md` for release history.
+
+Detail pages use the `open-view` action and `renderView(viewId, args)`, returning a `ViewDefinition`. Handle declared button/keyboard events in `onViewEvent(viewId, eventId, args)`; the host renders again after the handler. See [the detail UI protocol](../docs/plugins.md#13-插件布局详情页open-view).

@@ -6,5 +6,8 @@ export {
     Author,
     PluginInfo,
     PluginStatus,
-    RemotePlugin
+    RemotePlugin,
+    ViewDefinition,
+    ViewNode,
+    ViewPage
 } from "./models.js";

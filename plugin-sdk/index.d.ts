@@ -59,8 +59,7 @@ export interface PluginManifest {
 export type Platform = "darwin" | "windows" | "linux";
 
 /**
- * Permission `<capability>` or `<capability>:<scope>`. V1 implements only
- * `"storage"`; other parsed capabilities are denied and their APIs never
+ * Permission `<capability>` or `<capability>:<scope>`. Implements storage, background and scoped network; other APIs never
  * appear on the {@link PluginContext} (CAPABILITY_UNAVAILABLE).
  */
 export type Permission =
@@ -113,7 +112,11 @@ export interface ResultRow {
 }
 
 /** Host-executed side effects; unknown action types invalidate the whole row. */
-export type PluginAction =
+export type PluginAction = {
+  actionId?: string;
+  title?: string;
+  shortcut?: "left" | "right" | "cmd+enter" | "cmd+c";
+} & (
   | {
       /** Opens `url` in the user's configured browser (Settings › General). */
       type: "open-url";
@@ -129,7 +132,14 @@ export type PluginAction =
       type: "callback";
       id: string;
       args?: string[];
-    };
+    }
+  | {
+      /** Replaces search UI with a declarative plugin detail page. */
+      type: "open-view";
+      /** Passed to renderView and onViewEvent as viewId. */
+      id: string;
+      args?: string[];
+    });
 
 /* ------------------------------------------------------------------ */
 /* Module exports                                                      */
@@ -137,12 +147,12 @@ export type PluginAction =
 
 /**
  * The shape of `module.exports` expected by the host loader; all members
- * optional. `onAction` is the single business entry for both call sources
+ * optional. `onAction` handles both list call sources
  * (the host distinguishes them by timing and budget, not by id).
  */
 export interface Plugin {
   /**
-   * Only business entry. Two call sources:
+   * Result list entry. Two call sources:
    *
    * - **prefix hit (live)**: called on EVERY keystroke while the query
    *   matches a declared command prefix; actionId is that command's `id`
@@ -167,6 +177,10 @@ export interface Plugin {
    * disable/uninstall/reload is host-side.
    */
   activate?(ctx: PluginContext): void | Promise<void>;
+  /** Detail page definition; called on open and after every view event. */
+  renderView?(viewId: string, args: string[]): MaybePromise<ViewDefinition>;
+  /** Update plugin state; host then calls renderView within the same 5s budget. */
+  onViewEvent?(viewId: string, eventId: string, args: string[]): MaybePromise<void>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -182,6 +196,12 @@ export interface PluginContext {
   storage?: PluginStorage;
   /** Host logger; entries land in the application log as `plugin <id> [<level>]: …`. */
   log: LogAPI;
+  /** Always available; return the standard host list. */
+  ui: { list(rows: ResultRow[]): ResultRow[] };
+  /** Declared background permission; 1000..86400000ms, max 16 timers. */
+  background?: { every(intervalMs: number, callback: () => MaybePromise<void>): number; cancel(id: number): void };
+  /** Scoped network permission. Synchronous, bounded by the current call budget. */
+  network?: { request(url: string, options?: { method?: string; headers?: Record<string, string>; body?: string }): { status: number; ok: boolean; headers: Record<string, string>; body: string } };
 }
 
 /**
@@ -201,4 +221,19 @@ export interface LogAPI {
   info(...parts: unknown[]): void;
   warn(...parts: unknown[]): void;
   error(...parts: unknown[]): void;
+}
+
+/** Supported layout components; no HTML, CSS, DOM or script rendering. */
+export type ViewNode =
+  | { type: "column" | "row" | "card"; title?: string; gap?: "small" | "medium" | "large"; children?: ViewNode[] }
+  | { type: "text"; text: string; tone?: "default" | "muted" | "success" | "warning" | "danger" }
+  | { type: "progress"; title?: string; value: number; max: number }
+  | { type: "button"; text: string; event: string };
+
+/** At most 256 nodes, depth 16, 256KiB serialized. */
+export interface ViewDefinition {
+  title?: string;
+  root: ViewNode;
+  /** Escape is reserved for host navigation. */
+  shortcuts?: Partial<Record<"left" | "right" | "enter", string>>;
 }

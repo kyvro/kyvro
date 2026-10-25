@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "com.example.capabilities",
+  "name": "Plugin Capabilities Demo",
+  "version": "0.1.0",
+  "minHostVersion": "0.1.0",
+  "main": "main.js",
+  "description": "Background refresh, HTTP, cached list UI and left/right navigation",
+  "permissions": ["storage", "background", "network:api.github.com"],
+  "commands": [{"id": "demo", "title": "Capabilities Demo", "prefix": "plugdemo"}]
+}

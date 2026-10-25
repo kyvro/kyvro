@@ -6,10 +6,13 @@ func TestParsePermissionsDefaultPolicy(t *testing.T) {
 	p := ParsePermissions("com.example.test",
 		[]string{"storage", "network:api.github.com", "clipboard:read", "shell:git"}, nil)
 
+	if !p.Granted("network:api.github.com") {
+		t.Error("declared network domain should be granted")
+	}
 	if !p.Granted("storage") {
 		t.Error("storage should be granted under the default policy")
 	}
-	for _, name := range []string{"network:api.github.com", "clipboard:read", "shell:git"} {
+	for _, name := range []string{"clipboard:read", "shell:git"} {
 		if p.Granted(name) {
 			t.Errorf("%s should not be granted by default", name)
 		}
@@ -42,7 +45,7 @@ func TestRequire(t *testing.T) {
 	if code, ok := CodeOf(denied.Require("p", "storage")); !ok || code != ErrPermissionDenied {
 		t.Errorf("undeclared storage must be PERMISSION_DENIED, got %v", denied.Require("p", "storage"))
 	}
-	for _, name := range []string{"network:api.github.com", "filesystem:~/**", "clipboard:read", "secrets:x", "background", "system:open-url"} {
+	for _, name := range []string{"filesystem:~/**", "clipboard:read", "secrets:x", "system:open-url"} {
 		err := granted.Require("p", name)
 		code, ok := CodeOf(err)
 		if !ok || code != ErrCapabilityUnavailable {

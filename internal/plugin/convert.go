@@ -57,14 +57,35 @@ func convertResult(pluginID, iconPath string, obj map[string]any) (core.SearchRe
 		return core.SearchResult{}, false
 	}
 	subtitle, _ := obj["subtitle"].(string)
-	return core.SearchResult{
+	result := core.SearchResult{
 		ID:            "plugin:" + pluginID + ":" + id,
 		Title:         title,
 		Subtitle:      subtitle,
 		PrimaryAction: action,
 		Score:         clampScore(obj["scoreHint"]),
 		IconPath:      iconPath,
-	}, true
+	}
+	for _, raw := range rawActions[1:] {
+		obj, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		action, ok := convertAction(pluginID, raw)
+		if !ok {
+			continue
+		}
+		id, _ := obj["actionId"].(string)
+		if id == "" {
+			id, _ = obj["id"].(string)
+		}
+		if id == "" {
+			continue
+		}
+		title, _ := obj["title"].(string)
+		shortcut, _ := obj["shortcut"].(string)
+		result.Actions = append(result.Actions, core.ActionItem{ID: id, Title: title, Shortcut: shortcut, Action: action})
+	}
+	return result, true
 }
 
 // convertAction maps a JS action object to a core Action.
@@ -86,13 +107,17 @@ func convertAction(pluginID string, v any) (core.Action, bool) {
 			return core.Action{}, false
 		}
 		return core.Action{Kind: core.ActionCopyText, Arg: value}, true
-	case "callback":
+	case "open-view", "callback":
 		id, _ := obj["id"].(string)
 		if id == "" {
 			return core.Action{}, false
 		}
+		kind := core.ActionPlugin
+		if obj["type"] == "open-view" {
+			kind = core.ActionPluginView
+		}
 		return core.Action{
-			Kind:     core.ActionPlugin,
+			Kind:     kind,
 			PluginID: pluginID,
 			ActionID: id,
 			Args:     toStringSlice(obj["args"]),

@@ -32,9 +32,11 @@ type Manager struct {
 	store *core.Store
 	grant GrantDecision
 
-	mu      sync.RWMutex
-	plugins map[string]*loadedPlugin
-	cmds    commandIndex // prefix command index over enabled plugins
+	mu         sync.RWMutex
+	plugins    map[string]*loadedPlugin
+	viewMu     sync.Mutex
+	activeView *viewSession
+	cmds       commandIndex // prefix command index over enabled plugins
 }
 
 type loadedPlugin struct {
@@ -76,7 +78,7 @@ const stateNamespace = "plugins-state"
 
 // NewManager creates a manager over root. store may be nil (plugins then get
 // no storage, storage permission or not); grant may be nil (V1 default
-// policy: storage-only).
+// policy: declared storage, background and scoped network).
 func NewManager(root string, store *core.Store, grant GrantDecision) *Manager {
 	return &Manager{
 		root:    root,
@@ -117,6 +119,7 @@ func (m *Manager) LoadAll() {
 					lp.disabled = true
 				}
 			}
+			lp.rt.backgroundEnabled.Store(!lp.disabled)
 			loaded[lp.manifest.ID] = lp
 			log.Printf("plugin: loaded %s %s", lp.manifest.ID, lp.manifest.Version)
 		}
@@ -218,7 +221,7 @@ func (m *Manager) load(pluginDir string) (*loadedPlugin, error) {
 	if m.store != nil && perms.Granted("storage") {
 		storage = NewPluginStorage(m.store, manifest.ID)
 	}
-	rt, err := newRuntime(manifest, dir, storage)
+	rt, err := newRuntime(manifest, dir, storage, perms)
 	if err != nil {
 		return nil, err
 	}
@@ -310,6 +313,7 @@ func (m *Manager) SetEnabled(pluginID string, enabled bool) error {
 	lp, ok := m.plugins[pluginID]
 	if ok {
 		lp.disabled = !enabled
+		lp.rt.backgroundEnabled.Store(enabled)
 		m.rebuildCommandsLocked()
 	}
 	m.mu.Unlock()
@@ -349,6 +353,7 @@ func (m *Manager) disable(pluginID string) {
 	defer m.mu.Unlock()
 	if lp, ok := m.plugins[pluginID]; ok && !lp.disabled {
 		lp.disabled = true
+		lp.rt.backgroundEnabled.Store(false)
 		m.rebuildCommandsLocked()
 		log.Printf("plugin: disabled %s after %d consecutive timeouts", pluginID, disableStrikes)
 	}

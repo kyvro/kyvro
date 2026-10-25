@@ -53,12 +53,12 @@ Manifest `permissions` 声明 `<capability>` 或 `<capability>:<scope>` 两种�
 | Capability | 状态 | V1 授权策略 | 运行时行为 |
 |-----|-----|-----|-----|
 | storage | ✅ 已实现 | 声明即授权 | 注入 `ctx.storage`（同步 string→string KV，bucket `plugin:<id>`） |
-| network | ⏳ 已解析未实现 | 暂不授权 | `ctx.network` 不注入；预留调用返回 `CAPABILITY_UNAVAILABLE` |
+| network | ✅ 已实现 | 声明 `network:<hostname>` 即授权 | `ctx.network.request`；域名与重定向校验、超时、响应大小限制，见 plugins.md §12 |
 | filesystem | ⏳ 已解析未实现 | 暂不授权 | 同上 |
 | shell | ⏳ 已解析未实现 | 暂不授权 | 同上 |
 | clipboard | ⏳ 已解析未实现 | 暂不授权 | 同上 |
 | secrets | ⏳ 已解析未实现 | 暂不授权 | 同上 |
-| background | ⏳ 已解析未实现 | 暂不授权 | 同上 |
+| background | ✅ 已实现 | 声明即授权 | `ctx.background.every/cancel`；禁用暂停，卸载/重载/退出回收 |
 | system | ⏳ 已解析未实现 | 规划 SystemOnly | 规划为 System Plugin 专用，普通插件不可申请 |
 
 未知能力名按拒绝处理（`Require` 时返回 `PERMISSION_DENIED`）。
