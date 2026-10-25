@@ -32,7 +32,7 @@ import * as plugin$0 from "../internal/plugin/models.js";
  * @returns {$CancellablePromise<core$0.FolderSource>}
  */
 export function AddFolderSource(path, maxDepth) {
-    return $Call.ByName("kyvro/service.SearchService.AddFolderSource", path, maxDepth).then(/** @type {($result: any) => any} */(($result) => {
+    return $Call.ByID(3442979147, path, maxDepth).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType0($result);
     }));
 }
@@ -44,7 +44,7 @@ export function AddFolderSource(path, maxDepth) {
  * @returns {$CancellablePromise<void>}
  */
 export function AddSnippet(trigger, replacement) {
-    return $Call.ByName("kyvro/service.SearchService.AddSnippet", trigger, replacement);
+    return $Call.ByID(807125279, trigger, replacement);
 }
 
 /**
@@ -52,7 +52,7 @@ export function AddSnippet(trigger, replacement) {
  * @returns {$CancellablePromise<plugin$0.RemotePlugin[]>}
  */
 export function AvailablePlugins() {
-    return $Call.ByName("kyvro/service.SearchService.AvailablePlugins").then(/** @type {($result: any) => any} */(($result) => {
+    return $Call.ByID(1804721074).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType2($result);
     }));
 }
@@ -63,7 +63,7 @@ export function AvailablePlugins() {
  * @returns {$CancellablePromise<string[]>}
  */
 export function Browsers() {
-    return $Call.ByName("kyvro/service.SearchService.Browsers").then(/** @type {($result: any) => any} */(($result) => {
+    return $Call.ByID(1142220318).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType3($result);
     }));
 }
@@ -73,7 +73,7 @@ export function Browsers() {
  * @returns {$CancellablePromise<void>}
  */
 export function ClosePluginView(sessionID) {
-    return $Call.ByName("kyvro/service.SearchService.ClosePluginView", sessionID);
+    return $Call.ByID(3675761439, sessionID);
 }
 
 /**
@@ -88,7 +88,7 @@ export function ClosePluginView(sessionID) {
  * @returns {$CancellablePromise<core$0.SearchResult[]>}
  */
 export function Execute(id, actionID) {
-    return $Call.ByName("kyvro/service.SearchService.Execute", id, actionID).then(/** @type {($result: any) => any} */(($result) => {
+    return $Call.ByID(2894020374, id, actionID).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType5($result);
     }));
 }
@@ -99,7 +99,7 @@ export function Execute(id, actionID) {
  * @returns {$CancellablePromise<string>}
  */
 export function ExternalBrowser() {
-    return $Call.ByName("kyvro/service.SearchService.ExternalBrowser");
+    return $Call.ByID(504328536);
 }
 
 /**
@@ -107,7 +107,7 @@ export function ExternalBrowser() {
  * @returns {$CancellablePromise<core$0.FolderSourceInfo[]>}
  */
 export function FolderSources() {
-    return $Call.ByName("kyvro/service.SearchService.FolderSources").then(/** @type {($result: any) => any} */(($result) => {
+    return $Call.ByID(1684839075).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType7($result);
     }));
 }
@@ -119,7 +119,7 @@ export function FolderSources() {
  * @returns {$CancellablePromise<string>}
  */
 export function ImportPluginZip() {
-    return $Call.ByName("kyvro/service.SearchService.ImportPluginZip");
+    return $Call.ByID(3179607268);
 }
 
 /**
@@ -128,7 +128,7 @@ export function ImportPluginZip() {
  * @returns {$CancellablePromise<void>}
  */
 export function InstallPlugin(id) {
-    return $Call.ByName("kyvro/service.SearchService.InstallPlugin", id);
+    return $Call.ByID(1844346045, id);
 }
 
 /**
@@ -138,7 +138,7 @@ export function InstallPlugin(id) {
  * @returns {$CancellablePromise<plugin$0.ViewPage | null>}
  */
 export function OpenPluginView(id, actionID) {
-    return $Call.ByName("kyvro/service.SearchService.OpenPluginView", id, actionID).then(/** @type {($result: any) => any} */(($result) => {
+    return $Call.ByID(4111518269, id, actionID).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType9($result);
     }));
 }
@@ -150,7 +150,7 @@ export function OpenPluginView(id, actionID) {
  * @returns {$CancellablePromise<string>}
  */
 export function PickFolderSourcePath() {
-    return $Call.ByName("kyvro/service.SearchService.PickFolderSourcePath");
+    return $Call.ByID(3139331788);
 }
 
 /**
@@ -159,7 +159,7 @@ export function PickFolderSourcePath() {
  * @returns {$CancellablePromise<plugin$0.ViewPage | null>}
  */
 export function PluginViewEvent(sessionID, event) {
-    return $Call.ByName("kyvro/service.SearchService.PluginViewEvent", sessionID, event).then(/** @type {($result: any) => any} */(($result) => {
+    return $Call.ByID(358956851, sessionID, event).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType9($result);
     }));
 }
@@ -170,7 +170,7 @@ export function PluginViewEvent(sessionID, event) {
  * @returns {$CancellablePromise<plugin$0.PluginInfo[]>}
  */
 export function Plugins() {
-    return $Call.ByName("kyvro/service.SearchService.Plugins").then(/** @type {($result: any) => any} */(($result) => {
+    return $Call.ByID(444198097).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType11($result);
     }));
 }
@@ -180,7 +180,7 @@ export function Plugins() {
  * @returns {$CancellablePromise<void>}
  */
 export function RefreshAllFolderSources() {
-    return $Call.ByName("kyvro/service.SearchService.RefreshAllFolderSources");
+    return $Call.ByID(3858442937);
 }
 
 /**
@@ -189,7 +189,7 @@ export function RefreshAllFolderSources() {
  * @returns {$CancellablePromise<void>}
  */
 export function RefreshFolderSource(id) {
-    return $Call.ByName("kyvro/service.SearchService.RefreshFolderSource", id);
+    return $Call.ByID(2530920235, id);
 }
 
 /**
@@ -198,7 +198,7 @@ export function RefreshFolderSource(id) {
  * @returns {$CancellablePromise<void>}
  */
 export function RemoveFolderSource(id) {
-    return $Call.ByName("kyvro/service.SearchService.RemoveFolderSource", id);
+    return $Call.ByID(1985581934, id);
 }
 
 /**
@@ -207,7 +207,7 @@ export function RemoveFolderSource(id) {
  * @returns {$CancellablePromise<void>}
  */
 export function RemoveSnippet(trigger) {
-    return $Call.ByName("kyvro/service.SearchService.RemoveSnippet", trigger);
+    return $Call.ByID(2574413044, trigger);
 }
 
 /**
@@ -216,7 +216,7 @@ export function RemoveSnippet(trigger) {
  * @returns {$CancellablePromise<void>}
  */
 export function RequestSnippetAccessibility() {
-    return $Call.ByName("kyvro/service.SearchService.RequestSnippetAccessibility");
+    return $Call.ByID(1927811739);
 }
 
 /**
@@ -225,7 +225,7 @@ export function RequestSnippetAccessibility() {
  * @returns {$CancellablePromise<void>}
  */
 export function RevealPluginsFolder() {
-    return $Call.ByName("kyvro/service.SearchService.RevealPluginsFolder");
+    return $Call.ByID(881473702);
 }
 
 /**
@@ -234,7 +234,7 @@ export function RevealPluginsFolder() {
  * @returns {$CancellablePromise<core$0.SearchResult[]>}
  */
 export function Search(query) {
-    return $Call.ByName("kyvro/service.SearchService.Search", query).then(/** @type {($result: any) => any} */(($result) => {
+    return $Call.ByID(2004525483, query).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType5($result);
     }));
 }
@@ -246,7 +246,7 @@ export function Search(query) {
  * @returns {$CancellablePromise<void>}
  */
 export function SetExternalBrowser(app) {
-    return $Call.ByName("kyvro/service.SearchService.SetExternalBrowser", app);
+    return $Call.ByID(2443523026, app);
 }
 
 /**
@@ -256,7 +256,7 @@ export function SetExternalBrowser(app) {
  * @returns {$CancellablePromise<void>}
  */
 export function SetFolderSourceEnabled(id, enabled) {
-    return $Call.ByName("kyvro/service.SearchService.SetFolderSourceEnabled", id, enabled);
+    return $Call.ByID(804849789, id, enabled);
 }
 
 /**
@@ -266,7 +266,7 @@ export function SetFolderSourceEnabled(id, enabled) {
  * @returns {$CancellablePromise<void>}
  */
 export function SetPluginEnabled(id, enabled) {
-    return $Call.ByName("kyvro/service.SearchService.SetPluginEnabled", id, enabled);
+    return $Call.ByID(2582656035, id, enabled);
 }
 
 /**
@@ -276,7 +276,7 @@ export function SetPluginEnabled(id, enabled) {
  * @returns {$CancellablePromise<void>}
  */
 export function SetSnippetEnabled(trigger, enabled) {
-    return $Call.ByName("kyvro/service.SearchService.SetSnippetEnabled", trigger, enabled);
+    return $Call.ByID(1740263623, trigger, enabled);
 }
 
 /**
@@ -285,7 +285,7 @@ export function SetSnippetEnabled(trigger, enabled) {
  * @returns {$CancellablePromise<void>}
  */
 export function SetSnippetsEnabled(enabled) {
-    return $Call.ByName("kyvro/service.SearchService.SetSnippetsEnabled", enabled);
+    return $Call.ByID(166999392, enabled);
 }
 
 /**
@@ -294,7 +294,7 @@ export function SetSnippetsEnabled(enabled) {
  * @returns {$CancellablePromise<boolean>}
  */
 export function SnippetAccessibilityGranted() {
-    return $Call.ByName("kyvro/service.SearchService.SnippetAccessibilityGranted");
+    return $Call.ByID(556355039);
 }
 
 /**
@@ -302,7 +302,7 @@ export function SnippetAccessibilityGranted() {
  * @returns {$CancellablePromise<core$0.Snippet[]>}
  */
 export function Snippets() {
-    return $Call.ByName("kyvro/service.SearchService.Snippets").then(/** @type {($result: any) => any} */(($result) => {
+    return $Call.ByID(20510241).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType13($result);
     }));
 }
@@ -312,7 +312,7 @@ export function Snippets() {
  * @returns {$CancellablePromise<boolean>}
  */
 export function SnippetsEnabled() {
-    return $Call.ByName("kyvro/service.SearchService.SnippetsEnabled");
+    return $Call.ByID(2161103978);
 }
 
 /**
@@ -321,7 +321,7 @@ export function SnippetsEnabled() {
  * @returns {$CancellablePromise<void>}
  */
 export function UninstallPlugin(id) {
-    return $Call.ByName("kyvro/service.SearchService.UninstallPlugin", id);
+    return $Call.ByID(1309368692, id);
 }
 
 /**
@@ -329,7 +329,7 @@ export function UninstallPlugin(id) {
  * @returns {$CancellablePromise<string>}
  */
 export function Version() {
-    return $Call.ByName("kyvro/service.SearchService.Version");
+    return $Call.ByID(2173289165);
 }
 
 // Private type creation functions

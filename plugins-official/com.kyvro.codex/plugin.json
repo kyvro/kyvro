@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "com.kyvro.codex",
+  "name": "Codex Usage",
+  "version": "0.1.0",
+  "minHostVersion": "0.1.0",
+  "description": "查询 Codex 订阅额度：已用、剩余与重置时间（codex）",
+  "author": {
+    "name": "Kyvro"
+  },
+  "main": "main.js",
+  "icon": "icon.svg",
+  "permissions": [
+    "filesystem:read:~/.codex/auth.json",
+    "network:chatgpt.com",
+    "storage",
+    "background"
+  ],
+  "commands": [
+    {
+      "id": "codex.usage",
+      "title": "Codex 用量",
+      "prefix": "codex"
+    }
+  ]
+}

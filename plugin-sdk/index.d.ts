@@ -59,7 +59,7 @@ export interface PluginManifest {
 export type Platform = "darwin" | "windows" | "linux";
 
 /**
- * Permission `<capability>` or `<capability>:<scope>`. Implements storage, background and scoped network; other APIs never
+ * Permission `<capability>` or `<capability>:<scope>`. Implements storage, background, scoped network and exact file reads; other APIs never
  * appear on the {@link PluginContext} (CAPABILITY_UNAVAILABLE).
  */
 export type Permission =
@@ -192,6 +192,10 @@ export interface Plugin {
  * absent — feature-detect (`if (ctx.storage)`) instead of assuming.
  */
 export interface PluginContext {
+  /** Exact file read grants: filesystem:read:<absolute-or-~/path>.
+   * UTF-8 regular files only, max 2MiB. No writes, directory reads or symlinks.
+   */
+  filesystem?: { readText(path: string): string };
   /** Present ONLY when the `"storage"` permission was granted. */
   storage?: PluginStorage;
   /** Host logger; entries land in the application log as `plugin <id> [<level>]: …`. */
@@ -201,7 +205,7 @@ export interface PluginContext {
   /** Declared background permission; 1000..86400000ms, max 16 timers. */
   background?: { every(intervalMs: number, callback: () => MaybePromise<void>): number; cancel(id: number): void };
   /** Scoped network permission. Synchronous, bounded by the current call budget. */
-  network?: { request(url: string, options?: { method?: string; headers?: Record<string, string>; body?: string }): { status: number; ok: boolean; headers: Record<string, string>; body: string } };
+  network?: { request(url: string, options?: { method?: string; headers?: Record<string, string>; body?: string; followRedirects?: boolean }): { status: number; ok: boolean; headers: Record<string, string>; body: string } };
 }
 
 /**
@@ -227,7 +231,7 @@ export interface LogAPI {
 export type ViewNode =
   | { type: "column" | "row" | "card"; title?: string; gap?: "small" | "medium" | "large"; children?: ViewNode[] }
   | { type: "text"; text: string; tone?: "default" | "muted" | "success" | "warning" | "danger" }
-  | { type: "progress"; title?: string; value: number; max: number }
+  | { type: "progress"; title?: string; /** Optional right-hand summary, replacing the default percentage. */ text?: string; tone?: "default" | "muted" | "success" | "warning" | "danger"; value: number; max: number }
   | { type: "button"; text: string; event: string };
 
 /** At most 256 nodes, depth 16, 256KiB serialized. */

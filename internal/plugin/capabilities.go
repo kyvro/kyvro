@@ -16,6 +16,7 @@ const maxResponseBytes = 2 << 20
 
 // All capability callbacks run on the VM worker. Timer goroutines only dispatch.
 func (r *jsRuntime) installCapabilities(vm *goja.Runtime, ctx *goja.Object) {
+	r.installFilesystem(vm, ctx)
 	ui := vm.NewObject()
 	ui.Set("list", func(call goja.FunctionCall) goja.Value { return call.Argument(0) })
 	ctx.Set("ui", ui)
@@ -56,9 +57,13 @@ func (r *jsRuntime) installCapabilities(vm *goja.Runtime, ctx *goja.Object) {
 			network.Set("request", func(call goja.FunctionCall) goja.Value {
 				options := call.Argument(1)
 				method, body := "GET", ""
+				followRedirects := true
 				headers := map[string]string{}
 				if !isAbsent(options) {
 					obj := options.ToObject(vm)
+					if v := obj.Get("followRedirects"); !isAbsent(v) {
+						followRedirects = v.ToBoolean()
+					}
 					if v := obj.Get("method"); !isAbsent(v) {
 						method = v.String()
 					}
@@ -72,7 +77,7 @@ func (r *jsRuntime) installCapabilities(vm *goja.Runtime, ctx *goja.Object) {
 						}
 					}
 				}
-				response, err := r.request(call.Argument(0).String(), method, body, headers)
+				response, err := r.requestWithRedirects(call.Argument(0).String(), method, body, headers, followRedirects)
 				if err != nil {
 					panic(vm.NewGoError(err))
 				}
@@ -137,6 +142,10 @@ func (r *jsRuntime) checkURL(u *url.URL) error {
 }
 
 func (r *jsRuntime) request(rawURL, method, body string, headers map[string]string) (map[string]any, error) {
+	return r.requestWithRedirects(rawURL, method, body, headers, true)
+}
+
+func (r *jsRuntime) requestWithRedirects(rawURL, method, body string, headers map[string]string, followRedirects bool) (map[string]any, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, Errorf(r.pluginID, ErrInvalidArgument, "invalid URL")
@@ -162,12 +171,30 @@ func (r *jsRuntime) request(rawURL, method, body string, headers map[string]stri
 	}()
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, strings.NewReader(body))
 	if err != nil {
-		return nil, Errorf(r.pluginID, ErrInvalidArgument, "invalid request: %v", err)
+		return nil, Errorf(r.pluginID, ErrInvalidArgument, "invalid request")
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
 	client := &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if !followRedirects {
+			return http.ErrUseLastResponse
+		}
+		previous := via[len(via)-1].URL
+		if previous.Scheme == "https" && req.URL.Scheme != "https" {
+			return Errorf(r.pluginID, ErrNetworkBlocked, "HTTPS redirect downgrade blocked")
+		}
+		original := via[0].URL
+		if !strings.EqualFold(original.Scheme, req.URL.Scheme) || !strings.EqualFold(original.Host, req.URL.Host) {
+			// Go strips some standard credentials, but custom API-key headers need protection too.
+			for name := range headers {
+				req.Header.Del(name)
+			}
+			req.Header.Del("Authorization")
+			req.Header.Del("Proxy-Authorization")
+			req.Header.Del("Cookie")
+			req.Header.Del("Referer")
+		}
 		if len(via) >= 10 {
 			return Errorf(r.pluginID, ErrNetworkBlocked, "too many redirects")
 		}
@@ -181,12 +208,12 @@ func (r *jsRuntime) request(rawURL, method, body string, headers map[string]stri
 		if code, ok := CodeOf(err); ok {
 			return nil, Errorf(r.pluginID, code, "request blocked")
 		}
-		return nil, Errorf(r.pluginID, ErrHostAPIError, "network request failed: %v", err)
+		return nil, Errorf(r.pluginID, ErrHostAPIError, "network request failed")
 	}
 	defer res.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(res.Body, maxResponseBytes+1))
 	if err != nil {
-		return nil, Errorf(r.pluginID, ErrHostAPIError, "read response: %v", err)
+		return nil, Errorf(r.pluginID, ErrHostAPIError, "response read failed")
 	}
 	if len(data) > maxResponseBytes {
 		return nil, Errorf(r.pluginID, ErrHostAPIError, "response exceeds 2MiB")

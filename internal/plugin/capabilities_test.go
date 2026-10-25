@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -139,5 +140,47 @@ func TestCapabilitiesAbsentWithoutPermission(t *testing.T) {
 	rows, err := rt.RunAction(context.Background(), "test", nil, time.Second)
 	if err != nil || len(rows) != 1 || rows[0].Title != "true" {
 		t.Fatalf("%v %v", rows, err)
+	}
+}
+
+func TestNetworkCredentialRedirects(t *testing.T) {
+	var received atomic.Bool
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		received.Store(true)
+		for _, header := range []string{"Authorization", "Cookie", "X-API-Key", "ChatGPT-Account-Id", "Referer"} {
+			if req.Header.Get(header) != "" {
+				t.Errorf("forwarded sensitive header %s", header)
+			}
+		}
+		if req.URL.Path == "/" {
+			http.Redirect(w, req, "/final", http.StatusFound)
+			return
+		}
+		w.Write([]byte("ok"))
+	}))
+	defer destination.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		http.Redirect(w, req, destination.URL, http.StatusFound)
+	}))
+	defer origin.Close()
+	rt := newTestRuntime(t, strings.Replace(validManifest, `["storage"]`, `["network:127.0.0.1"]`, 1), ``)
+	headers := map[string]string{"Authorization": "Bearer fixture-secret", "Cookie": "session=fixture-secret", "X-API-Key": "fixture-secret", "ChatGPT-Account-Id": "fixture-account"}
+	response, err := rt.request(origin.URL, "GET", "", headers)
+	if err != nil || response["status"] != 200 || !received.Load() {
+		t.Fatalf("response=%v err=%v received=%v", response, err, received.Load())
+	}
+	received.Store(false)
+	response, err = rt.requestWithRedirects(origin.URL, "GET", "", headers, false)
+	if err != nil || response["status"] != 302 || received.Load() {
+		t.Fatalf("redirect followed: %v %v", response, err)
+	}
+}
+
+func TestNetworkErrorsDoNotExposeURL(t *testing.T) {
+	rt := newTestRuntime(t, strings.Replace(validManifest, `["storage"]`, `["network:127.0.0.1"]`, 1), ``)
+	// Invalid header forces a transport error without external network traffic.
+	_, err := rt.request("http://127.0.0.1:1/?token=fixture-secret", "GET", "", map[string]string{"X-Test": "\nfixture-secret"})
+	if err == nil || strings.Contains(err.Error(), "fixture-secret") {
+		t.Fatalf("unsafe error: %v", err)
 	}
 }

@@ -15,7 +15,7 @@ var unimplemented = map[string]bool{
 
 // GrantDecision decides which of a plugin's requested permissions are
 // granted. It returns the subset of requested names that should be granted.
-// A nil GrantDecision grants declared storage, background and scoped network. Reserved for the
+// A nil GrantDecision grants declared storage, background, scoped network and exact file reads. Reserved for the
 // settings UI so per-plugin grants can be wired in without refactoring.
 type GrantDecision func(pluginID string, requested []string) []string
 
@@ -23,7 +23,7 @@ type GrantDecision func(pluginID string, requested []string) []string
 func defaultGrant(_ string, requested []string) []string {
 	var out []string
 	for _, name := range requested {
-		if permissionBase(name) == "storage" || name == "background" || strings.HasPrefix(name, "network:") {
+		if permissionBase(name) == "storage" || name == "background" || validFileReadPermission(name) || strings.HasPrefix(name, "network:") {
 			out = append(out, name)
 		}
 	}
@@ -77,6 +77,12 @@ func (p *PermissionSet) Granted(name string) bool {
 //   - anything else                  → PERMISSION_DENIED
 func (p *PermissionSet) Require(pluginID, name string) error {
 	base := permissionBase(name)
+	if validFileReadPermission(name) {
+		if p.granted[name] {
+			return nil
+		}
+		return Errorf(pluginID, ErrPermissionDenied, "permission %q not granted", name)
+	}
 	if unimplemented[base] {
 		return Errorf(pluginID, ErrCapabilityUnavailable,
 			"permission %q requested a capability this host version does not provide", name)

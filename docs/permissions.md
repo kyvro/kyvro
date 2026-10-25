@@ -54,7 +54,7 @@ Manifest `permissions` 声明 `<capability>` 或 `<capability>:<scope>` 两种�
 |-----|-----|-----|-----|
 | storage | ✅ 已实现 | 声明即授权 | 注入 `ctx.storage`（同步 string→string KV，bucket `plugin:<id>`） |
 | network | ✅ 已实现 | 声明 `network:<hostname>` 即授权 | `ctx.network.request`；域名与重定向校验、超时、响应大小限制，见 plugins.md §12 |
-| filesystem | ⏳ 已解析未实现 | 暂不授权 | 同上 |
+| filesystem | ✅ 精确文件只读 | `filesystem:read:<path>` 声明即授权 | `ctx.filesystem.readText`；其他 scope 未实现 |
 | shell | ⏳ 已解析未实现 | 暂不授权 | 同上 |
 | clipboard | ⏳ 已解析未实现 | 暂不授权 | 同上 |
 | secrets | ⏳ 已解析未实现 | 暂不授权 | 同上 |
@@ -86,7 +86,7 @@ unknown / not granted          → PERMISSION_DENIED
 | 无（基础接口） | `ctx.log` | `kyvro.runtime`、`kyvro.extensions` |
 | storage | `ctx.storage.get/set/delete` | 保持独立命名空间 |
 | network | — | `kyvro.network.fetch(url)`，域名白名单 |
-| filesystem | — | `kyvro.files.read/write/list`，范围受限 |
+| filesystem | `ctx.filesystem.readText` | `kyvro.files.read/write/list`，范围受限 |
 | clipboard | — | `kyvro.clipboard.readText/writeText` |
 | background | — | `kyvro.background`（持久服务） |
 | system | — | `kyvro.system`（仅 System Plugin） |
@@ -260,3 +260,8 @@ Run activate(ctx)（2s 预算，支持 Promise）
 - **M2**：设置界面接入 `GrantDecision`（per-plugin 权限授予 UI）；实现 `network` API（域名白名单，拦截返回 `NETWORK_BLOCKED`）；实现 `filesystem` API（用户选定目录 scope）
 - **M3**：Trust Level 判定与签名校验；Manifest 升级为 Capability 声明；Policy Engine 支持权限组合限制
 - **M4+**：System Plugin 体系（Input Matcher / Project Scanner / Credential Broker，独立升级）；Sensitive Mode；Agent Tool（权限继承插件自身，Agent 不能绕过 Permission Engine）
+
+
+### 精确文件只读权限
+
+`filesystem:read:<path>` 已实现，路径为绝对路径或 `~/` 开头，按当前 manifest 声明即授权；注入 `ctx.filesystem.readText(path)`，只允许声明的精确普通文件、UTF-8 文本、最大 2MiB，不允许目录、末级符号链接或写入。其余 filesystem scope 仍未实现。自定义 `GrantDecision` 可拒绝授权。Codex 插件使用此通用能力并自行管理认证和 API 请求，宿主不提供服务专用接口。读取凭据文件的插件能够获得凭据，应仅安装信任的插件；逐项授权 UI 尚未实现。

@@ -176,7 +176,7 @@ wails3 generate bindings -d frontend/bindings -clean -names
 
 - Text Snippets / 全局文本扩展：功能已开发完成并验证，当前临时下线（代码保留，恢复方式见上文标注），计划后续版本重新开放
 - 剪贴板历史
-- 插件市场 / 安装升级回滚 / Secrets / network・filesystem・shell・clipboard・background API / UI DSL（插件 M2+）
+- Secrets、通用文件写入 / 目录读取、shell / clipboard API（网络、精确文件读取、后台定时和 UI DSL 已实现）
 - ESM 插件与 TypeScript 工具链（当前仅 CommonJS）
 - 文件索引 / Spotlight 集成
 - 设置界面扩展：热键自定义、插件权限粒度授权（当前仅插件启用/禁用）
@@ -187,6 +187,13 @@ wails3 generate bindings -d frontend/bindings -clean -names
 - `ctx.background.every/cancel`：定时 JS 回调，禁用暂停、启用恢复，卸载/重载/退出回收。
 - `ctx.network.request`：精确域名授权，重定向复检，调用预算超时与 2MiB 响应限制。
 - `ctx.ui.list`：宿主列表、多次级动作，详情左右切换，Esc 返回入口。
-- `plugins-example/com.example.capabilities`：后台刷新、HTTP、缓存与导航示例；大模型 usage 插件尚未实现。
+- `plugins-example/com.example.capabilities`：后台刷新、HTTP、缓存与导航示例；Codex 用量插件见下。
 
 - 插件布局详情：`open-view` 在当前窗口切换详情；`renderView` 定义横纵布局、卡片、文本、进度条、按钮；`onViewEvent` 处理左右键和按钮，Back/Esc 返回原列表。详情渲染不更新索引。
+
+- 官方 `com.kyvro.codex` 插件：紧凑布局，计划合并至标题，额度行突出会话/每周剩余百分比、右侧显示距离重置的时间，进度条表示剩余额度，低于或等于 10% 时标黄；更新时间与刷新按钮同行；输入 `codex` 查看订阅额度已用 / 剩余百分比、重置时间、计划与 Credits；首次打开查询、手动刷新、每 5 分钟后台缓存更新，错误保留旧数据并提示缓存时间。
+- `filesystem:read:<path>` 通用精确文件只读能力：支持绝对路径与 `~/`，UTF-8 普通文件、最大 2MiB，拒绝末级 symlink；插件独立管理 Codex OAuth 解析、网络请求和缓存，宿主无 Codex 专用 API。当前仅支持默认 `~/.codex/auth.json`，不支持钥匙串、API Key 额度或多账号。
+
+- 插件详情字号与搜索列表统一：主标题 / 额度标题 15px，次要文字与按钮 12px；缩小页头、内容边距、组件分组间距及进度条高度。
+
+- 插件网络安全加固：支持禁止重定向，Codex 查询已开启；跨源跳转移除自定义请求头，阻止 HTTPS 降级，网络错误不回传原始 URL。

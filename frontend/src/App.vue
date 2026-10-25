@@ -289,17 +289,17 @@ onBeforeUnmount(() => {
   >
     <section v-if="detail" ref="detailEl" tabindex="-1" aria-label="Plugin detail"
       class="flex min-h-0 flex-1 flex-col outline-none">
-      <header class="flex h-[68px] shrink-0 items-center gap-4 border-b border-white/10 px-5">
-        <button type="button" class="rounded-lg px-2 py-1 text-sm text-white/60 hover:bg-white/10"
+      <header class="flex h-[52px] shrink-0 items-center gap-3 border-b border-white/10 px-5">
+        <button type="button" class="rounded-lg px-2 py-1 text-xs text-white/60 hover:bg-white/10"
           @click="backFromDetail">← Back</button>
-        <h1 class="truncate text-lg text-white/90">{{ detail.Definition.title || 'Plugin detail' }}</h1>
+        <h1 class="truncate text-[15px] leading-tight text-white/90">{{ detail.Definition.title || 'Plugin detail' }}</h1>
         <span v-if="detailBusy" role="status" class="ml-auto text-xs text-white/40">Loading…</span>
       </header>
-      <div class="min-h-0 flex-1 overflow-y-auto p-5">
+      <div class="min-h-0 flex-1 overflow-y-auto px-5 py-3">
         <PluginViewNode :node="detail.Definition.root" :busy="detailBusy" @action="runViewEvent" />
-        <p v-if="error" role="alert" class="mt-4 text-sm text-red-300">{{ error }}</p>
+        <p v-if="error" role="alert" class="mt-3 text-xs text-red-300">{{ error }}</p>
       </div>
-      <footer class="border-t border-white/10 px-5 py-3 text-xs text-white/40">
+      <footer class="border-t border-white/10 px-5 py-2 text-xs text-white/40">
         Esc back <span v-if="detail.Definition.shortcuts?.left || detail.Definition.shortcuts?.right" class="ml-4">← / → switch</span>
       </footer>
     </section>

@@ -241,7 +241,7 @@ export class RemotePlugin {
         if (/** @type {any} */(false)) {
             /**
              * @member
-             * @type {string | undefined}
+             * @type {Date | undefined}
              */
             this["updated_at"] = undefined;
         }
@@ -270,11 +270,15 @@ export class RemotePlugin {
      */
     static createFrom($$source = {}) {
         const $$createField4_0 = $$createType1;
+        const $$createField6_0 = $Create.DateFromTime;
         const $$createField7_0 = $$createType0;
         const $$createField8_0 = $$createType0;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("author" in $$parsedSource) {
             $$parsedSource["author"] = $$createField4_0($$parsedSource["author"]);
+        }
+        if ("updated_at" in $$parsedSource) {
+            $$parsedSource["updated_at"] = $$createField6_0($$parsedSource["updated_at"]);
         }
         if ("permissions" in $$parsedSource) {
             $$parsedSource["permissions"] = $$createField7_0($$parsedSource["permissions"]);

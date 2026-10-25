@@ -166,7 +166,8 @@ manifest `permissions` 声明 `<capability>` 或 `<capability>:<scope>` 形式�
 |-----|-----|-----|
 | `storage` | ✅ 实现 | 声明即授权，注入 `ctx.storage` |
 | `network:<hostname>` / `background` | ✅ 实现 | 声明即授权，见 §12 |
-| `filesystem` / `shell` / `clipboard` / `secrets` / `system` | ⏳ 保留 | API 不注入；调用返回 `CAPABILITY_UNAVAILABLE` |
+| `filesystem:read:<path>` | ✅ 实现 | 精确文件只读，见 §14 |
+| 其他 `filesystem` / `shell` / `clipboard` / `secrets` / `system` | ⏳ 保留 | API 不注入；调用返回 `CAPABILITY_UNAVAILABLE` |
 | 未知能力 | — | `PERMISSION_DENIED` |
 
 三态校验语义、授权策略、Trust Level 与 Capability 演进方向见 [permissions.md](./permissions.md)。
@@ -273,7 +274,7 @@ module.exports.onAction = (actionId, args) => {
 ## 12. 后台、网络与列表 UI
 
 SDK 类型：`plugin-sdk/index.d.ts`；示例：`plugins-example/com.example.capabilities/`。
-本阶段提供基础能力，尚未实现 CodexBar / 大模型 usage 插件。
+官方 Codex 用量插件见 §14。
 
 当前 JS API 不提供搜索索引更新能力；后台任务、网络刷新、storage 写入与列表导航均不触发索引更新。索引更新边界及后续变更约定见 [index.md §4.5](./index.md#45-插件-api-的索引边界与变更约定)。业务缓存可按需使用，搜索入口无需读取缓存。
 
@@ -306,7 +307,7 @@ const response = ctx.network.request("https://api.github.com/zen", {
 if (response.ok) ctx.storage.set("cached", response.body);
 ```
 
-同步 API，支持 `method`、`headers`、string `body`。
+同步 API，支持 `method`、`headers`、string `body`、`followRedirects`（默认 true；false 返回原始 3xx，Codex 查询使用 false）。跨源重定向不转发插件自定义请求头，禁止 HTTPS 降级至 HTTP。网络错误不包含原始 URL 或底层错误文本，避免查询参数或凭据进入日志。
 返回 `{status, ok, headers, body}`，响应头键为小写；非 2xx 正常返回，JSON 使用 `JSON.parse(response.body)`。
 请求受当前调用剩余预算与最大 5s 限制；响应最多 2MiB。
 网络会阻塞本插件 VM，应在后台刷新或 Enter 回调中调用，避免搜索时发请求。
@@ -409,3 +410,18 @@ module.exports.onViewEvent = (viewId, eventId, args) => {
 - 页面最多 256 个节点、嵌套深度 16、JSON 256KiB；单文本最多 16384 字节，标题最多 1024 字节，事件 ID 最多 128 字节。非法组件树返回 `INVALID_ARGUMENT`。
 
 详情 API 和会话均为内存状态，不增加搜索索引更新接口、不写索引文件，边界见 [index.md §4.5](./index.md#45-插件-api-的索引边界与变更约定)。
+
+
+## 14. 通用文件读取与 Codex 用量插件
+
+声明 `filesystem:read:<path>` 后注入 `ctx.filesystem.readText(path)`。path 必须是绝对路径或 `~/` 开头；只授权一个精确文件，不支持目录、通配符、环境变量或写入。路径归一化后逐项检查授权，拒绝末级符号链接和非普通文件，以 OpenRoot 限制父目录内解析并核对打开前后文件身份。仅返回 UTF-8 文本，最大 2MiB；文件内容和底层读取错误不写入宿主日志。未声明 / 未授权时不注入 API。沿用当前 manifest 声明即授权策略，`GrantDecision` 可拒绝授权。
+
+官方插件：`plugins-official/com.kyvro.codex/`。通过设置导入打包 zip，输入 `codex`，Enter 查看。插件自己读取 `~/.codex/auth.json`、解析 OAuth 登录态、调用 `https://chatgpt.com/backend-api/wham/usage`、处理错误和缓存。宿主没有任何 Codex 专用能力或数据类型。插件声明 `filesystem:read:~/.codex/auth.json`、`network:chatgpt.com`、`storage` 和 `background`；token 在插件内短暂使用，不写入缓存、日志或错误文本，缓存只保存展示字段。
+
+参考本地 CodexBar 的 `docs/codex-oauth.md` 和 `CodexOAuthUsageFetcher.swift` 协议。展示主 / 次额度窗口的已用、剩余百分比、重置时间、订阅计划与额外 Credits；不能换算成剩余请求数或 token 数。首次打开查询，后续读取缓存，按钮或 Enter 刷新，应用运行时每 5 分钟后台刷新。后台更新不主动重绘已打开页面，点击刷新更新显示。刷新失败保留上次数据并提示错误，超过 10 分钟的缓存标为过期。
+
+当前支持默认目录的单账号 OAuth 文件登录；不支持钥匙串、仅 API Key、多账号、自定义 CODEX_HOME 或代理端点。自定义路径可修改插件源码及 manifest 的精确文件授权。插件不修改登录文件、不刷新共享 refresh token；401/403 提示通过 Codex 重新登录。内部用量 API 变化只需更新插件。
+
+后续通用能力可增加：逐项权限授权 UI、详情页更新通知、后台立即执行与失败退避、按名称授权的环境变量读取和系统密钥存储。后续服务接入复用文件 / 网络 / 后台 / 缓存接口，在插件内完成业务。
+
+进度条节点可通过 `text` 指定右侧摘要（替代默认百分比），`tone: "warning"` 高亮低额度。Codex 插件使用此通用展示能力显示剩余比例与相对重置时间；倒计时按本次渲染时间计算，点击刷新后更新。
